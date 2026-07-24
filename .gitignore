@@ -1,31 +1,6 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-.venv/
-venv/
 .env
-
-# ML artifacts
-runs/
-*.pth
-*.pt
-*.onnx
-*.engine
-shards/
-wandb/
-mlruns/
-.dvc/cache/
-
-# OS / editors
-.DS_Store
-.idea/
-.vscode/
-
-# Tests / coverage
-.pytest_cache/
-.coverage
-htmlcov/
+*.log
+__pycache__/
+*.pyc
+weights/
+data/
