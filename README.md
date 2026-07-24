@@ -83,3 +83,6 @@ confidence calibration + abstain, ONNX parity, shard round-trip, diagnostics.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## SVTRv2
+Scene Text Recognition v2
