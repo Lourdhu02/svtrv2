@@ -1,88 +1,134 @@
-# tambour
+# svtrv2
 
-**Production OCR engine for analog mechanical rolling-counter meters** — the kind
-where the reading sits on rotating digit drums (a *tambour*). Given a pre-cropped
-strip, it recognizes the digit string (e.g. `088687`) with an SVTRv2-style CTC
-recognizer, built for scale (millions of images, multiple meter domains) and for
-the signature hard case: the **rolling/half digit** caught mid-rotation.
+**OCR engine for digital utility meter displays** — seven-segment LCD and LED
+registers, photographed through the meter's enclosure. Given a pre-cropped strip
+it recognizes the digit string (e.g. `04872.6`) with an SVTRv2 CTC recognizer
+built to the paper (arXiv 2411.15858v2).
 
 ```bash
-pip install -r requirements.txt
-python -m tambour sweep                       # take all 4 variants through once
-python -m tambour train --model tambour-b --data /path/to/dataset --device auto
+pip install -e .
+python -m svtrv2 info  --model m
+python -m svtrv2 bins  --data /path/to/dataset        # fit the MSR bins first
+python -m svtrv2 train --model m --data /path/to/dataset --device cuda
 ```
-
-## Why this design (research-backed)
-
-| Concern | Choice |
-|--------|--------|
-| Recognizer | **SVTRv2-style CTC** + FRM (alignment) + SGM (train-only guidance). CTC beats encoder-decoders on short digit strings — faster *and* more accurate. |
-| Rolling/half digits | Label the **lowest visible digit**; optional **AugLoss** doesn't penalize reading the in-between wheel; **synthetic rolling** augmentation oversamples it. |
-| Red fractional wheel | Excluded from the billed read (`billed_reading`); the `.` boundary is kept in labels. |
-| Many domains (4+) | One shared backbone + **per-domain adapters** (FiLM, identity-init) + **domain-balanced sampling**. |
-| Millions of images | **WebDataset tar shards** (sequential I/O), **DDP + bf16**, group-split by `meter_id`. |
-| Trust | **Calibrated confidence + abstain** — route low-confidence reads to humans for ≥99.5% accepted-read precision. |
-| Deploy | ONNX export (fixed width, dynamic batch) → TensorRT/OpenVINO; CTC decode outside the graph. |
 
 ## Model variants
 
-| variant | params (approx) | use |
-|---------|------|-----|
-| `tambour-n` | ~1.5M | edge / smoke / distill student |
-| `tambour-s` | ~5M | light |
-| `tambour-b` | ~9M | default |
-| `tambour-l` | ~20M | top accuracy / teacher |
+Four sizes. **S / M / L are the paper's T / S / B configurations verbatim**,
+renamed; XL is the one extrapolation, and it keeps every structural rule the
+paper sets (heads = groups = D/32, local blocks first, global last, stage 2 as
+the crossover).
 
-Charset `0123456789.` → 12 classes (incl. CTC blank). Input letterboxed (MSR,
-aspect-preserving) to 3×48×192 (≈ the 4:1 digit-strip aspect; tune with `--img-w`).
+| variant | dims | depths | heads | permutation | params | inference params |
+|---|---|---|---|---|---|---|
+| `svtrv2-s` | 64 / 128 / 256 | 3, 6, 3 | 2, 4, 8 | `[L]6[G]6` | 8.48M | 6.36M |
+| `svtrv2-m` | 96 / 192 / 384 | 3, 6, 3 | 3, 6, 12 | `[L]6[G]6` | 18.34M | 13.58M |
+| `svtrv2-l` | 128 / 256 / 384 | 6, 6, 6 | 4, 8, 12 | `[L]8[G]10` | 27.27M | 22.52M |
+| `svtrv2-xl` | 192 / 384 / 512 | 6, 9, 9 | 6, 12, 16 | `[L]8[G]16` | 65.37M | 56.93M |
+
+Short aliases work: `--model s|m|l|xl`. The gap between the two parameter columns
+is the semantic guidance module, which is **train-only** and contributes nothing
+at inference.
+
+Charset `0123456789.` → 12 classes including the CTC blank.
+
+## Why this design
+
+| Concern | Choice |
+|---|---|
+| Recognizer | SVTRv2 CTC. Each mixing block is local **or** global — never both — with local mixing as two consecutive grouped `Conv2d` and no norm between them. |
+| Variable crop shapes | **MSR**: three canvases (`64x192`, `64x288`, `64x384`) picked from the raw aspect ratio. No positional encoding anywhere, which is what lets one set of weights take all three. |
+| CTC blank collapse | A uniform-alignment warmup at 0.5 decaying to zero over 40 epochs, plus a `-2.0` initial blank bias. |
+| Linguistic context | SGM ramps in from epoch 5 over 10 epochs, then fuses away at inference. |
+| Glare, washout, bleed | A display-specific augmentation set — see below. |
+| Split leakage | `meter_id` (filename before the first `-`) never spans two splits; repeat photos of one meter are near-duplicates. |
+| Serving | ONNX export per MSR bin, with a torch-vs-onnxruntime parity check. |
+
+## Augmentation
+
+Derived from the reported failure modes for seven-segment meter capture —
+specular reflection, contrast collapse at oblique angles, segment bleeding,
+non-uniform illumination, auto-exposure swing, lens blur, day/night — rather than
+from a generic image-classifier recipe. WBSEDCL's meters sit in a transparent
+enclosure and their LCDs are specified for only a **35° viewing cone**, which
+makes glare and washout dominant in West Bengal field photos.
+
+| op | models |
+|---|---|
+| `glare` | saturating elliptical hotspot off the enclosure — clips to white, destroying lit/unlit contrast underneath |
+| `viewing_angle_washout` | contrast collapse past the LCD viewing cone, as a vertical gradient |
+| `backlight_bloom` | segment bleeding — **polarity-aware**: dark strokes spread on a reflective LCD, light glows outward on an LED |
+| `segment_fade` | an aging or under-driven segment, faint but present |
+| `moire` | interference from photographing a segment/pixel grid |
+
+One display effect per sample (`A.OneOf`, p=0.65); stacking them produces images
+no camera would ever produce.
+
+**`segment_fade` attenuates, it never erases.** Deleting the lower-left segment of
+an `8` turns it into a `9` while the label still reads `8` — that trains the model
+to hallucinate. Every augmentation here leaves the label true.
 
 ## Dataset format
 
 ```
 <data_dir>/
   images/
-  labels.txt        # "filename<TAB>reading[<TAB>domain]" per line
+  labels.txt        # "filename<TAB>reading" per line
 ```
-`domain` is optional (inferred from the filename otherwise); `meter_id` is the text
-before the first `-` and is used to keep all photos of one meter in a single split.
+
+`meter_id` is the filename text before the first `-`.
+
+## MSR bins are not final
+
+The shipped bin edges (AR 3.5 / 5.0) are starting values reasoned from WBSEDCL's
+"≥6 digits" register spec, **not** fitted to your images. Run:
+
+```bash
+python -m svtrv2 bins --data /path/to/dataset
+```
+
+It reports the aspect-ratio percentiles and label lengths, and suggests edges.
+Set each bin's `width ≈ aspect × 64` and keep `timesteps = width // 8`.
 
 ## CLI
 
 ```bash
-python -m tambour train    --model tambour-b --data DATA --device auto --aug-loss
-python -m tambour val      --ckpt runs/exp/best.pth --data DATA
-python -m tambour predict  --ckpt best.pth --source img_or_dir --tau 0.9 --tta
-python -m tambour calibrate --ckpt best.pth --data DATA --precision 0.995   # -> T, abstain tau
-python -m tambour mine     --ckpt best.pth --source unlabeled/ --out to_relabel.txt
-python -m tambour export   --ckpt best.pth --output tambour-b.onnx
-python -m tambour shards   --data DATA --out shards/ --resize-h 48          # scale: pack to tar
-python -m tambour sweep                                                     # all 4 variants once
-python -m tambour agents   --model tambour-b --data DATA                    # health/latency/leakage
-python -m tambour info     --model tambour-l
+python -m svtrv2 train   --model m --data DATA --device cuda --name run1
+python -m svtrv2 train   --model m --data DATA --name run1 --resume   # after a crash
+python -m svtrv2 val     --ckpt runs/run1/best.pth --data DATA
+python -m svtrv2 predict --ckpt runs/run1/best.pth --source img_or_dir -o readings.csv
+python -m svtrv2 export  --ckpt runs/run1/best.pth --bin medium
+python -m svtrv2 info    --model xl
+python -m svtrv2 bins    --data DATA
 ```
 
-## Scale & portability
+`--resume` continues from `runs/<name>/last.pth` with the optimizer, scheduler,
+EMA, gradient scaler, epoch counter and history intact, and reuses the persisted
+splits so the val set never reshuffles under you. It fails loudly if there is no
+checkpoint rather than silently restarting.
 
-- **CPU / single-GPU / multi-GPU / Colab** from the same code: `resolve_device`
-  falls back to CPU; AMP autocast (bf16) + GradScaler activate only on CUDA.
-- **Multi-GPU:** launch with `torchrun --nproc_per_node=N -m tambour train ...`
-  (DDP auto-detected from env). Non-balanced runs shard via `DistributedSampler`.
-- **Millions of images:** build tar shards once (`tambour shards`) and stream them
-  with `data.shards.ShardDataset` (stdlib `tarfile`, no hard dependency).
+`torch.compile` is on by default on CUDA and falls back to eager if Inductor
+can't handle your build. The first batch of each MSR bin pays the compile cost —
+that is not a hang. Disable with `--no-compile`.
+
+AMP is bf16 by default; `--amp-dtype fp16` switches on a `GradScaler`
+automatically (bf16 does not need one, and skipped steps are excluded from the
+EMA either way).
+
+`predict` prints one line for a single image and writes
+`filename,reading,confidence,flag` for a directory, flagging rows below
+`--min-conf` (default 0.90) as `REVIEW`.
+
+Confidence is the **minimum** per-digit probability, so one shaky digit sinks the
+whole read. It catches hesitant errors, not confident ones — a glare hotspot that
+turns an 8 into a 9 with no hesitation in the logits still scores high. Treat it
+as triage, never as proof.
 
 ## Tests
 
 ```bash
-python tests/test_engine.py        # or: python -m pytest tests
+python -m pytest tests -q      # or: python tests/test_engine.py
 ```
-All tests run on CPU against synthetic rendered strips (no dataset needed): codec,
-manifest + leakage-safe split, transforms, domain-balanced sampler, **forward for
-all 4 variants** + domain conditioning, CTC/AugLoss backward, loaders, overfit,
-confidence calibration + abstain, ONNX parity, shard round-trip, diagnostics.
 
-## License
-
-MIT — see [LICENSE](LICENSE).
-
-## SVTRv2
-Scene Text Recognition v2
+CPU-only and fully synthetic — it renders its own seven-segment images, so no
+dataset is required.
