@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 
 
-def export_onnx(net, img_h: int, img_w: int, output: str = "tambour.onnx",
+def export_onnx(net, img_h: int, img_w: int, output: str = "svtrv2.onnx",
                 opset: int = 18, check: bool = True) -> str:
     net = net.cpu().eval()
     dummy = torch.randn(1, 3, img_h, img_w)
@@ -41,8 +41,23 @@ def export_onnx(net, img_h: int, img_w: int, output: str = "tambour.onnx",
     return str(output)
 
 
-def run_export(ckpt_path: str, output: str = None, opset: int = 18) -> str:
-    from .infer import load_checkpoint
-    net, ckpt = load_checkpoint(ckpt_path, "cpu")
-    output = output or (Path(ckpt_path).with_suffix(".onnx").name)
-    return export_onnx(net, ckpt["img_h"], ckpt["img_w"], output, opset)
+def run_export(ckpt_path: str, output: str = None, opset: int = 18,
+               bin_name: str = "medium") -> str:
+    """Export one MSR canvas.
+
+    MSR means the model accepts three canvas sizes, but a fixed-width ONNX graph
+    is what exports and runs reliably under TensorRT, so pick the bin you serve
+    and export that one (or export all three and route by aspect ratio).
+    """
+    import torch
+
+    from .config import MSR_BINS
+    from .engine import load_checkpoint
+
+    net, _ckpt = load_checkpoint(ckpt_path, torch.device("cpu"))
+    bins = {str(b["name"]): b for b in MSR_BINS}
+    if bin_name not in bins:
+        raise ValueError(f"unknown MSR bin {bin_name!r}; expected one of {sorted(bins)}")
+    b = bins[bin_name]
+    output = output or f"{Path(ckpt_path).stem}-{bin_name}.onnx"
+    return export_onnx(net, int(b["height"]), int(b["width"]), output, opset)
