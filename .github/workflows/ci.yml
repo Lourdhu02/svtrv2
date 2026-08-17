@@ -19,6 +19,6 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt pytest ruff
       - name: Lint
-        run: ruff check tambour || true
+        run: ruff check svtrv2 || true
       - name: Test
         run: python tests/test_engine.py
