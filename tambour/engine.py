@@ -132,6 +132,7 @@ def train_epoch(net, loader, optimizer, scaler, criterion, device, cfg,
     core = net.module if hasattr(net, "module") else net
     use_amp = cfg.get("amp", True) and device.type == "cuda"
     sgm_w, center_w = cfg.get("sgm_weight", 0.0), cfg.get("center_weight", 0.0)
+    log_interval = cfg.get("log_interval", 50)
     total = 0.0
     try:
         from tqdm import tqdm
@@ -139,7 +140,7 @@ def train_epoch(net, loader, optimizer, scaler, criterion, device, cfg,
     except Exception:
         pass
 
-    for imgs, targets, lengths, _, domain_ids in loader:
+    for step, (imgs, targets, lengths, _, domain_ids) in enumerate(loader):
         imgs, targets = imgs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
         lengths, domain_ids = lengths.to(device), domain_ids.to(device)
         with autocast(device.type, dtype=_amp_dtype(), enabled=use_amp):
@@ -167,6 +168,9 @@ def train_epoch(net, loader, optimizer, scaler, criterion, device, cfg,
             if ema is not None:
                 ema.update(net)
         total += float(loss.item())
+        
+        if step % log_interval == 0 and step > 0:
+            print(f"    step {step}/{len(loader)} | loss {loss.item():.4f}")
     return total / max(len(loader), 1)
 
 

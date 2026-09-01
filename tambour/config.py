@@ -56,6 +56,9 @@ DEFAULTS: Dict[str, Any] = dict(
     focal_gamma=0.0,
     # confidence / abstain
     abstain_tau=0.0,     # 0 disables; set per precision target after calibration
+    # logging / monitoring
+    log_interval=50,
+    wandb_project="tambour",
 )
 
 
