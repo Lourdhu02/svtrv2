@@ -88,3 +88,12 @@ def build_criterion(cfg: Dict) -> nn.Module:
     if cfg.get("focal_gamma", 0.0) > 0:
         return FocalCTCLoss(blank=0, gamma=cfg["focal_gamma"])
     return nn.CTCLoss(blank=0, zero_infinity=True)
+
+
+def get_criterion_name(cfg: Dict) -> str:
+    """Return a human-readable name for the criterion based on config."""
+    if cfg.get("aug_loss"):
+        return f"AugLoss(positions={cfg.get('aug_loss_positions', 1)})"
+    if cfg.get("focal_gamma", 0.0) > 0:
+        return f"FocalCTCLoss(gamma={cfg['focal_gamma']})"
+    return "CTCLoss"
