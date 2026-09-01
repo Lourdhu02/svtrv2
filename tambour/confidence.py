@@ -82,3 +82,27 @@ def tta_logits(net, tensors: torch.Tensor, domain_ids=None) -> torch.Tensor:
     """Average probabilities across TTA views, return as log-probs for decoding."""
     log_probs = net(tensors, domain_ids).float()
     return log_probs.exp().mean(0, keepdim=True).clamp_min(1e-12).log()
+
+
+def compute_precision_recall_at_thresholds(confs: Sequence[float], correct: Sequence[int],
+                                            thresholds: Sequence[float] = None) -> List[Dict]:
+    """Compute precision, recall, and coverage at multiple confidence thresholds."""
+    if thresholds is None:
+        thresholds = np.linspace(0.0, 1.0, 21)
+    confs, correct = np.asarray(confs), np.asarray(correct)
+    results = []
+    for tau in thresholds:
+        mask = confs >= tau
+        if mask.any():
+            precision = correct[mask].mean()
+            recall = correct[mask].sum() / max(correct.sum(), 1)
+            coverage = mask.mean()
+        else:
+            precision, recall, coverage = 0.0, 0.0, 0.0
+        results.append({
+            "threshold": float(tau),
+            "precision": float(precision),
+            "recall": float(recall),
+            "coverage": float(coverage),
+        })
+    return results
