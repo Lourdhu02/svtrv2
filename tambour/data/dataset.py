@@ -36,6 +36,9 @@ class MeterDataset(Dataset):
         domain_id = self.domain_to_id.get(s.domain, 0)
         return tensor, target, len(s.label), s.label, domain_id
 
+    def __repr__(self) -> str:
+        return f"MeterDataset(samples={len(self.samples)}, domains={len(self.domain_to_id)})"
+
 
 def collate_fn(batch):
     imgs, targets, lengths, labels, domain_ids = zip(*batch)
