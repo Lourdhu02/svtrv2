@@ -82,3 +82,8 @@ def billed_reading(label: str) -> str:
 
 def is_valid_label(label: str) -> bool:
     return len(label) > 0 and all(c in _C2I for c in label)
+
+
+def get_charset_size() -> int:
+    """Return the number of characters in the charset (excluding CTC blank)."""
+    return len(CHARSET)
