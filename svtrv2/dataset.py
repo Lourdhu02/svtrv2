@@ -4,12 +4,11 @@ Layout::
 
     <data_dir>/
       images/
-      labels.txt      # "filename<TAB>reading" per line
+  labels.txt      # "filename<TAB>text" per line
 
-`meter_id` is the filename text before the first '-'.  Every photo of one
-physical meter is kept inside a single split: the same register photographed
-twice is close to a duplicate, and letting one copy sit in train while the other
-sits in val inflates validation accuracy without improving the model.
+`group_id` is the filename text before the first '-'.  Samples that share a
+group id should stay in a single split: near-duplicates inflate validation
+scores without improving the model.
 """
 from __future__ import annotations
 
@@ -36,18 +35,19 @@ _BIN_BY_NAME = {b["name"]: b for b in MSR_BINS}
 
 
 @dataclass(frozen=True)
-class MeterSample:
+class Sample:
     fname: str
     label: str
-    meter_id: str
+    group_id: str
 
 
-def meter_id_of(fname: str) -> str:
-    """All photos of one physical meter share this id."""
+def group_id_of(fname: str) -> str:
+    """Samples with the same filename prefix share this group id."""
     return fname.split("-", 1)[0]
 
 
-def parse_manifest(data_dir: str, verbose: bool = True) -> List[MeterSample]:
+
+def parse_manifest(data_dir: str, verbose: bool = True) -> List[Sample]:
     """Read ``labels.txt``: ``fname<TAB>label`` (or whitespace-separated) per line.
 
     Unusable rows are skipped but **counted and reported**.  Silently dropping
@@ -62,7 +62,7 @@ def parse_manifest(data_dir: str, verbose: bool = True) -> List[MeterSample]:
     if not images_dir.is_dir():
         raise FileNotFoundError(f"{images_dir} not found")
 
-    out: List[MeterSample] = []
+    out: List[Sample] = []
     skipped = {"malformed": 0, "bad_label": 0, "missing_image": 0}
     examples: Dict[str, str] = {}
     with open(labels_file, "r", encoding="utf-8") as f:
@@ -84,7 +84,7 @@ def parse_manifest(data_dir: str, verbose: bool = True) -> List[MeterSample]:
                 skipped["missing_image"] += 1
                 examples.setdefault("missing_image", fname)
                 continue
-            out.append(MeterSample(fname, label, meter_id_of(fname)))
+            out.append(Sample(fname, label, group_id_of(fname)))
 
     total_skipped = sum(skipped.values())
     if verbose and total_skipped:
@@ -95,15 +95,15 @@ def parse_manifest(data_dir: str, verbose: bool = True) -> List[MeterSample]:
     return out
 
 
-def group_split(samples: Sequence[MeterSample],
+def group_split(samples: Sequence[Sample],
                 ratios: Tuple[float, float, float] = (0.9, 0.05, 0.05),
-                seed: int = 42, by_group: bool = True) -> Dict[str, List[MeterSample]]:
-    """Split into train/val/test, optionally keeping each meter_id intact."""
+                seed: int = 42, by_group: bool = True) -> Dict[str, List[Sample]]:
+    """Split into train/val/test, optionally keeping each group intact."""
     rng = random.Random(seed)
     if by_group:
-        groups: Dict[str, List[MeterSample]] = defaultdict(list)
+        groups: Dict[str, List[Sample]] = defaultdict(list)
         for s in samples:
-            groups[s.meter_id].append(s)
+            groups[s.group_id].append(s)
         units = list(groups.values())
     else:
         units = [[s] for s in samples]
@@ -111,7 +111,7 @@ def group_split(samples: Sequence[MeterSample],
 
     n = len(samples)
     n_train, n_val = int(n * ratios[0]), int(n * ratios[1])
-    splits: Dict[str, List[MeterSample]] = {"train": [], "val": [], "test": []}
+    splits: Dict[str, List[Sample]] = {"train": [], "val": [], "test": []}
     c_train = c_val = 0
     for u in units:
         if c_train < n_train:
@@ -150,7 +150,7 @@ def _jpeg_size(path: Path) -> Optional[Tuple[int, int]]:
         return None
 
 
-class MeterDataset(Dataset):
+class TextDataset(Dataset):
     """Dataset that assigns each sample an MSR bin from its raw aspect ratio.
 
     Bin assignment is cached to ``msr_cache.json`` beside ``images/``: it only
@@ -158,7 +158,7 @@ class MeterDataset(Dataset):
     slow enough to notice on every epoch-zero.
     """
 
-    def __init__(self, images_dir, samples: Sequence[MeterSample], transform,
+    def __init__(self, images_dir, samples: Sequence[Sample], transform,
                  codec: Optional[CTCCodec] = None) -> None:
         self.images_dir = Path(images_dir)
         self.samples = list(samples)
@@ -217,7 +217,6 @@ class MeterDataset(Dataset):
         target = torch.tensor(self.codec.encode(s.label), dtype=torch.long)
         return tensor, target, len(s.label), s.label, str(info["name"])
 
-
 class MSRBatchSampler(Sampler):
     """Yield batches drawn from a single MSR bin.
 
@@ -226,7 +225,7 @@ class MSRBatchSampler(Sampler):
     sees exactly three static shapes instead of a dynamic one.
     """
 
-    def __init__(self, dataset: MeterDataset, batch_size: int,
+    def __init__(self, dataset: TextDataset, batch_size: int,
                  shuffle: bool = True, drop_last: bool = True, seed: int = 42) -> None:
         self.dataset = dataset
         self.batch_size = int(batch_size)
@@ -315,7 +314,7 @@ def build_loaders(data_dir: str, cfg: Dict[str, Any], codec: Optional[CTCCodec] 
     if workers > 0:
         kw["persistent_workers"] = True
 
-    train_ds = MeterDataset(images_dir, splits["train"], train_tf, codec)
+    train_ds = TextDataset(images_dir, splits["train"], train_tf, codec)
     train_sampler = MSRBatchSampler(train_ds, cfg["batch"], shuffle=True,
                                     drop_last=True, seed=cfg.get("seed", 42))
     train_loader = DataLoader(train_ds, batch_sampler=train_sampler, **kw)
@@ -323,7 +322,7 @@ def build_loaders(data_dir: str, cfg: Dict[str, Any], codec: Optional[CTCCodec] 
     def eval_loader(split: str) -> Optional[DataLoader]:
         if not splits[split]:
             return None
-        ds = MeterDataset(images_dir, splits[split], eval_tf, codec)
+        ds = TextDataset(images_dir, splits[split], eval_tf, codec)
         sampler = MSRBatchSampler(ds, cfg["batch"], shuffle=False, drop_last=False)
         return DataLoader(ds, batch_sampler=sampler, **kw)
 
@@ -331,12 +330,12 @@ def build_loaders(data_dir: str, cfg: Dict[str, Any], codec: Optional[CTCCodec] 
     return train_loader, eval_loader("val"), eval_loader("test"), meta
 
 
-def _load_or_make_splits(samples: Sequence[MeterSample], cfg: Dict[str, Any],
-                         split_dir: Optional[str]) -> Dict[str, List[MeterSample]]:
+def _load_or_make_splits(samples: Sequence[Sample], cfg: Dict[str, Any],
+                         split_dir: Optional[str]) -> Dict[str, List[Sample]]:
     """Reuse persisted splits so a resumed run never reshuffles the val set."""
     by_name = {s.fname: s for s in samples}
     if split_dir and Path(split_dir).is_dir():
-        loaded: Dict[str, List[MeterSample]] = {}
+        loaded: Dict[str, List[Sample]] = {}
         for name in ("train", "val", "test"):
             path = Path(split_dir) / f"{name}.txt"
             if not path.exists():
@@ -350,7 +349,7 @@ def _load_or_make_splits(samples: Sequence[MeterSample], cfg: Dict[str, Any],
                        cfg.get("seed", 42), cfg.get("group_split", True))
 
 
-def save_splits(splits: Dict[str, List[MeterSample]], split_dir: Path) -> None:
+def save_splits(splits: Dict[str, List[Sample]], split_dir: Path) -> None:
     split_dir.mkdir(parents=True, exist_ok=True)
     for name, items in splits.items():
         (split_dir / f"{name}.txt").write_text(

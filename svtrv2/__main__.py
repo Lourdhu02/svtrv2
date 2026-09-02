@@ -12,7 +12,7 @@ from .config import MODELS, VARIANTS, load_config, resolve_model_name
 
 
 def _add_train_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--model", default="svtrv2-m", help=f"one of {', '.join(VARIANTS)} (or s/m/l/xl)")
+    p.add_argument("--model", default="svtrv2-s", help=f"one of {', '.join(VARIANTS)} (or t/s/b/xl)")
     p.add_argument("--data", required=True, help="dataset dir (images/ + labels.txt)")
     p.add_argument("--config", default=None, help="optional YAML overriding the defaults")
     p.add_argument("--epochs", type=int, default=None)
@@ -44,7 +44,7 @@ def _add_train_args(p: argparse.ArgumentParser) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="svtrv2", description=f"SVTRv2 digital meter OCR v{__version__}")
+        prog="svtrv2", description=f"SVTRv2 research implementation v{__version__}")
     sub = parser.add_subparsers(dest="command")
 
     _add_train_args(sub.add_parser("train", help="train a model"))
@@ -69,10 +69,10 @@ def main() -> int:
     ep.add_argument("--ckpt", required=True)
     ep.add_argument("--output", default=None)
     ep.add_argument("--opset", type=int, default=18)
-    ep.add_argument("--bin", default="medium", choices=["short", "medium", "long"])
+    ep.add_argument("--bin", default="medium", choices=["short", "medium", "long", "xlong"])
 
     ip = sub.add_parser("info", help="show a variant's shape and parameter count")
-    ip.add_argument("--model", default="svtrv2-m")
+    ip.add_argument("--model", default="svtrv2-s")
 
     bp = sub.add_parser("bins", help="measure a dataset and suggest MSR bin edges")
     bp.add_argument("--data", required=True)
@@ -187,7 +187,7 @@ def _cmd_predict(args) -> int:
     flagged = 0
     with open(out_path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["filename", "reading", "confidence", "flag"])
+        w.writerow(["filename", "text", "confidence", "flag"])
         for name, text, conf in results:
             flag = "REVIEW" if conf < args.min_conf else ""
             flagged += bool(flag)

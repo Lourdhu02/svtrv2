@@ -1,25 +1,7 @@
-"""Preprocessing (MSR fit-pad) and augmentation tuned for digital meter displays.
+"""Preprocessing (MSR fit-pad) and augmentation for scene text recognition.
 
-The augmentation set here is derived from what the literature reports actually
-breaks seven-segment recognition in the field, not from a generic image-classifier
-recipe.  Documented failure modes for LCD/LED meter capture are: specular
-reflection off the enclosure, contrast collapse at oblique viewing angles, low
-*and* high contrast, segment bleeding, non-uniform illumination, lens blur,
-camera auto-exposure swings, and day-versus-night capture.  Recognizers that
-score well on clean crops (PARSeq among them) are reported to degrade
-specifically under glare, so glare is modelled explicitly rather than
-approximated by brightness jitter.
-
-WBSEDCL's meters are sealed in a transparent enclosure and their LCDs are
-specified for a viewing cone of only 35 degrees up/down, which makes two of
-these dominant in West Bengal field photos: a specular hotspot from the cover,
-and washed-out contrast when the meter is photographed from below or above.
-
-One thing deliberately *not* modelled: erasing a segment.  Removing the lower-left
-segment of an 8 turns it into a 9 while the label still reads 8, which teaches
-the model to hallucinate.  `segment_fade` attenuates a segment instead of
-deleting it, so the model learns to read a faint-but-present stroke -- the real
-failure -- without ever being trained against a wrong label.
+The augmentation set is intentionally display-like and corruption-aware rather
+than a generic image-classifier recipe.
 """
 from __future__ import annotations
 
@@ -73,13 +55,7 @@ def require_rgb(image: np.ndarray, where: str) -> np.ndarray:
 
 def fit_pad(image: np.ndarray, target_h: int = 64, target_w: int = 288,
             pad_mode: str = "edge", **_) -> np.ndarray:
-    """Aspect-preserving resize centred on a padded canvas.
-
-    Unlike a plain stretch this keeps digit shapes and the decimal boundary
-    undistorted.  `pad_mode` defaults to edge replication: a digital register is
-    photographed against light LCD glass or a dark LED window, and a hard black
-    border against light glass reads like an extra stroke.
-    """
+    """Aspect-preserving resize centred on a padded canvas."""
     require_rgb(image, "fit_pad")
     h, w = image.shape[:2]
     s = min(target_h / max(h, 1), target_w / max(w, 1))
@@ -99,13 +75,7 @@ def fit_pad(image: np.ndarray, target_h: int = 64, target_w: int = 288,
 
 
 def glare(image: np.ndarray, **_) -> np.ndarray:
-    """Specular hotspot from the meter's transparent cover.
-
-    A reflection is not "brighter pixels" -- it *saturates*, destroying the
-    contrast between lit and unlit segments underneath it.  This draws a soft
-    elliptical highlight that clips to white at the core, which is what a sun or
-    flash reflection off polycarbonate actually does.
-    """
+    """Specular hotspot from a transparent cover or glossy surface."""
     h, w = image.shape[:2]
     out = image.astype(np.float32)
 
@@ -127,12 +97,7 @@ def glare(image: np.ndarray, **_) -> np.ndarray:
 
 
 def segment_fade(image: np.ndarray, **_) -> np.ndarray:
-    """Attenuate a thin segment-shaped bar toward the local background.
-
-    Simulates an aging LCD or a weak drive voltage, where a segment is present
-    but faint.  It never erases: `alpha` stays below 1 so the stroke survives at
-    reduced contrast and the label remains true.
-    """
+    """Attenuate a thin stroke toward the local background."""
     h, w = image.shape[:2]
     out = image.astype(np.float32)
 
@@ -148,8 +113,7 @@ def segment_fade(image: np.ndarray, **_) -> np.ndarray:
         x0 = random.randint(0, max(0, w - bw))
 
         patch = out[y0:y0 + bh, x0:x0 + bw]
-        # Fade toward the median of the surrounding area, not toward black --
-        # an unlit LCD segment takes the panel's colour, it does not go dark.
+        # Fade toward the median of the surrounding area rather than toward black.
         bg = float(np.median(out[max(0, y0 - bh):y0 + 2 * bh, max(0, x0 - bw):x0 + 2 * bw]))
         alpha = random.uniform(0.35, 0.75)
         out[y0:y0 + bh, x0:x0 + bw] = patch * alpha + bg * (1.0 - alpha)
@@ -158,15 +122,7 @@ def segment_fade(image: np.ndarray, **_) -> np.ndarray:
 
 
 def backlight_bloom(image: np.ndarray, **_) -> np.ndarray:
-    """Segment 'bleeding': strokes spread outward and thin gaps start to close.
-
-    Polarity matters, and getting it wrong makes this a no-op.  An emissive
-    display (LED, or an LCD with the backlight on at night) has strokes brighter
-    than the panel, and light bleeds *out* of them.  A reflective LCD in daylight
-    has dark strokes on light glass, and it is the dark stroke that spreads.
-    The panel level is taken as the median; whichever tail lies further from it
-    decides which way the bleed runs.
-    """
+    """Stroke bleeding where edges spread outward and thin gaps close."""
     k = random.choice([5, 7, 9, 11])
     img = image.astype(np.float32)
     blurred = cv2.GaussianBlur(image, (k, k), 0).astype(np.float32)
@@ -182,14 +138,7 @@ def backlight_bloom(image: np.ndarray, **_) -> np.ndarray:
 
 
 def viewing_angle_washout(image: np.ndarray, **_) -> np.ndarray:
-    """Contrast collapse past the LCD's viewing cone.
-
-    WBSEDCL specifies only 35 degrees up/down; beyond that a twisted-nematic LCD
-    greys out and can partially invert.  Modelled as a strong contrast
-    compression around a shifted midpoint, applied as a vertical gradient so one
-    end of the register washes out more than the other -- which is what a photo
-    taken from below looks like.
-    """
+    """Contrast collapse across one axis, as with an oblique viewing angle."""
     h, w = image.shape[:2]
     out = image.astype(np.float32)
     lo, hi = random.uniform(0.25, 0.6), random.uniform(0.0, 0.35)
@@ -250,9 +199,8 @@ def build_transforms(img_h: int, img_w: int, training: bool = True,
         if display:
             ops.append(A.OneOf(display, p=0.65))
 
-        # Geometry: a meter is photographed roughly square-on by a person
-        # standing in front of it, so these stay modest.  Large rotations would
-        # teach invariances the deployment never needs.
+        # Geometry stays modest; large rotations are rarely needed for short STR
+        # benchmarks and can teach invariances the model never uses.
         candidates = [
             lambda: A.Affine(scale=(0.92, 1.08), rotate=(-4, 4), shear=(-3, 3),
                              translate_percent=(-0.03, 0.03), fill=0, p=0.4),

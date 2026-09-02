@@ -1,13 +1,7 @@
-"""CTC label codec for digital meter registers.
+"""CTC label codec for scene text recognition.
 
-Labeling convention: transcribe the digits the register displays, left to right.
-A seven-segment display has no in-between state -- a segment is driven or it is
-not -- so there is no analogue of the analog engine's mid-rotation "rolling
-digit" rule, and no digit is ambiguous by construction.
-
-Where the display shows a decimal point, record it as '.'.  Whether the
-fractional digits belong in the billed value is a downstream policy decision,
-deliberately not baked into the codec.
+The codec is intentionally minimal: encode the target string to class indices
+and greedily decode predicted index sequences back to text.
 """
 from __future__ import annotations
 
@@ -36,11 +30,9 @@ class CTCCodec:
     def decode(self, indices: Sequence[int]) -> str:
         """Greedy CTC contraction.
 
-        A class is emitted when it differs from the *previous timestep's* class.
+        A class is emitted when it differs from the previous timestep's class.
         Adjacent duplicates collapse, but a duplicate separated by a blank is a
-        real repeat: '0 blank 0' is '00', not '0'.  Comparing against the last
-        *emitted* character instead would silently drop the second digit of
-        every '11', '22', '00' -- common in a meter reading.
+        real repeat.
         """
         out: List[str] = []
         for t, idx in enumerate(indices):
@@ -58,13 +50,7 @@ class CTCCodec:
         """Greedy-decode one sample's (T, C) log-probs with per-character confidence.
 
         Returns ``(text, min_confidence, per_char_confidences)``.  The minimum
-        over emitted characters is the conservative sequence confidence: one
-        shaky digit makes the whole exact-match read uncertain.
-
-        Note what this does *not* buy you.  A confidently wrong read -- a glare
-        hotspot that turns an 8 into a 9 with no hesitation in the logits --
-        scores high here.  Minimum confidence catches hesitant errors, not
-        certain ones, so it is a triage signal and never a correctness proof.
+        over emitted characters is the conservative sequence confidence.
         """
         probs = np.exp(log_probs)
         idx = probs.argmax(-1)
@@ -86,7 +72,7 @@ class CTCCodec:
 
 
 def split_integer_fraction(label: str) -> Tuple[str, str]:
-    """'01234.5' -> ('01234', '5'); '01234' -> ('01234', '')."""
+    """'text.part' -> ('text', 'part'); 'text' -> ('text', '')."""
     if "." in label:
         a, b = label.split(".", 1)
         return a, b

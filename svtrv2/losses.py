@@ -84,9 +84,9 @@ class SGMLoss(nn.Module):
 class UniformAlignmentLoss(nn.Module):
     """Early CTC anti-collapse loss with simple left-to-right target expansion.
 
-    Meter labels are read left-to-right from tightly cropped windows. During
-    warmup, this gives the visual classifier a direct non-blank signal at every
-    valid timestep. CTC remains the main objective and handles final alignment.
+    During warmup, this gives the visual classifier a direct non-blank signal at
+    every valid timestep. CTC remains the main objective and handles final
+    alignment.
     """
 
     def __init__(self, ignore_index: int = -100) -> None:

@@ -1,12 +1,7 @@
-"""svtrv2 — OCR engine for digital utility meter displays.
+"""svtrv2 — a paper-first SVTRv2 scene text recognition implementation.
 
-Reads the digit string from a pre-cropped seven-segment LCD or LED register with
-an SVTRv2 CTC recognizer built to the paper (arXiv 2411.15858v2): local/global
-mixing blocks, a feature rearrangement module, and a training-only semantic
-guidance module that fuses away at inference.
-
-Top-level names are resolved lazily, so importing the package stays cheap and
-never drags in torch.
+Top-level names are resolved lazily so importing the package stays cheap and
+does not pull in torch unless it is actually needed.
 """
 from __future__ import annotations
 

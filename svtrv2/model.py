@@ -353,7 +353,7 @@ class ContextualHead(SemanticGuidanceModule):
 
 
 class SVTRNet(nn.Module):
-    """SVTRv2 network for cropped mechanical kWh meter OCR."""
+    """SVTRv2 network for scene text recognition."""
 
     def __init__(self, num_classes: int = 12,
                  dims: Tuple[int, int, int] = (64, 128, 256),
@@ -412,11 +412,8 @@ class SVTRNet(nn.Module):
         ])
         idx += depths[1]
         # Stride 2 in width as well as the usual height reduction in merge1.
-        # The paper emits W/4 timesteps because it recognises up to 25
-        # characters; meter labels are 5-7, so W/4 gave T/L ~= 10.7 and CTC
-        # settled into the all-blank minimum (at the true optimum ~90% of
-        # frames are blank).  W/8 brings T/L to ~5 while leaving well above the
-        # 2L-1 frames CTC needs to emit repeated digits.
+        # The width stride is kept at 8 so CTC has enough frames for common
+        # short-text benchmarks while still being efficient.
         self.merge2 = nn.Conv2d(dims[1], dims[2], 3, (1, 2), 1)
         self.merge2_norm = nn.LayerNorm(dims[2])
         self.stage3 = nn.ModuleList([

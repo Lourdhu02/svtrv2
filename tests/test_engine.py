@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 from svtrv2.config import (MODELS, MSR_BINS, NUM_CLASSES, VARIANTS,  # noqa: E402
                            resolve_model_name)
-from svtrv2.dataset import (MeterDataset, MSRBatchSampler, build_loaders,  # noqa: E402
+from svtrv2.dataset import (MSRBatchSampler, TextDataset, build_loaders,  # noqa: E402
                             collate_fn, group_split, parse_manifest, save_splits)
 from svtrv2.engine import (compute_metrics, fit, load_checkpoint,  # noqa: E402
                            loss_weights, predict_dir, predict_image)
@@ -42,7 +42,7 @@ _SEGMENTS = {"0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc",
 
 def _render(text: str, dw: int = 40, dh: int = 72, margin: int = 10,
             emissive: bool = False) -> np.ndarray:
-    """Draw a seven-segment register, dark-on-light or light-on-dark."""
+    """Draw a seven-segment display sample, dark-on-light or light-on-dark."""
     w, h = len(text) * dw + 2 * margin, dh + 2 * margin
     bg, on, off = (((28, 30, 34), (235, 240, 245), (52, 55, 60)) if emissive
                    else ((196, 196, 192), (35, 38, 42), (176, 178, 180)))
@@ -62,7 +62,7 @@ def _render(text: str, dw: int = 40, dh: int = 72, margin: int = 10,
 
 
 def _make_dataset(root: Path, n: int = 48) -> Path:
-    """A tiny dataset with several photos per meter_id, so group-split has work."""
+    """A tiny dataset with several samples per group_id, so group-split has work."""
     rng = random.Random(0)
     (root / "images").mkdir(parents=True, exist_ok=True)
     lines = []
@@ -82,7 +82,7 @@ def _make_dataset(root: Path, n: int = 48) -> Path:
 
 
 def test_variants_follow_the_paper():
-    assert VARIANTS == ("svtrv2-s", "svtrv2-m", "svtrv2-l", "svtrv2-xl")
+    assert VARIANTS == ("svtrv2-t", "svtrv2-s", "svtrv2-b", "svtrv2-xl")
     for name, spec in MODELS.items():
         dims, depths, mixers = spec["dims"], spec["depths"], spec["mixers"]
         assert len(dims) == len(depths) == len(mixers) == 3, name
@@ -98,9 +98,11 @@ def test_variants_follow_the_paper():
 
 
 def test_aliases_resolve():
+    assert resolve_model_name("t") == "svtrv2-t"
     assert resolve_model_name("s") == "svtrv2-s"
+    assert resolve_model_name("b") == "svtrv2-b"
     assert resolve_model_name("XL") == "svtrv2-xl"
-    assert resolve_model_name("svtrv2-m") == "svtrv2-m"
+    assert resolve_model_name("svtrv2-s") == "svtrv2-s"
 
 
 def test_msr_bins_are_contiguous_and_consistent():
@@ -153,16 +155,17 @@ def test_decode_with_conf_reports_the_weakest_digit():
 def test_fit_pad_shapes_and_pad_modes():
     img = _render("012345")
     for mode in ("edge", "reflect", "black"):
-        assert fit_pad(img, 64, 288, pad_mode=mode).shape == (64, 288, 3), mode
+        assert fit_pad(img, 32, 128, pad_mode=mode).shape == (32, 128, 3), mode
     # Black padding really is black in the padded band.
     tall = _render("01", dw=40, dh=200)
-    assert fit_pad(tall, 64, 288, pad_mode="black")[:, 0].max() == 0
+    assert fit_pad(tall, 32, 128, pad_mode="black")[:, 0].max() == 0
 
 
 def test_select_msr_bin_covers_every_aspect_ratio():
     assert select_msr_bin(100, 100)["name"] == "short"     # AR 1.0
-    assert select_msr_bin(64, 256)["name"] == "medium"     # AR 4.0
-    assert select_msr_bin(50, 500)["name"] == "long"       # AR 10.0
+    assert select_msr_bin(64, 159)["name"] == "medium"     # AR 2.48
+    assert select_msr_bin(64, 220)["name"] == "long"       # AR 3.4
+    assert select_msr_bin(50, 500)["name"] == "xlong"      # AR 10.0
 
 
 def test_display_augmentations_are_shape_and_dtype_preserving():
@@ -176,16 +179,16 @@ def test_display_augmentations_are_shape_and_dtype_preserving():
 
 
 def test_bloom_respects_display_polarity():
-    """Reflective LCD strokes must spread darker, emissive LED strokes brighter.
+    """Dark-on-light strokes must spread darker, emissive strokes brighter.
 
     A polarity-blind implementation is a near no-op on one of the two, which is
     exactly the bug this guards against.
     """
     random.seed(3)
-    lcd = _render("048726", emissive=False)
-    led = _render("048726", emissive=True)
-    assert backlight_bloom(lcd.copy()).mean() < lcd.mean()
-    assert backlight_bloom(led.copy()).mean() > led.mean()
+    dark_on_light = _render("048726", emissive=False)
+    emissive = _render("048726", emissive=True)
+    assert backlight_bloom(dark_on_light.copy()).mean() < dark_on_light.mean()
+    assert backlight_bloom(emissive.copy()).mean() > emissive.mean()
 
 
 def test_segment_fade_never_erases_a_segment():
@@ -203,7 +206,7 @@ def test_eval_transforms_do_not_augment():
     a = tfs["medium"](image=img)["image"]
     b = tfs["medium"](image=img)["image"]
     assert torch.equal(a, b), "evaluation preprocessing must be deterministic"
-    assert a.shape == (3, 64, 288)
+    assert a.shape == (3, 32, 192)
 
 
 # --------------------------------------------------------------------- model
@@ -285,7 +288,7 @@ def test_sgm_loss_ignores_padding_and_survives_empty_targets():
 # ------------------------------------------------------------------- dataset
 
 
-def test_manifest_and_group_split_prevent_meter_leakage():
+def test_manifest_and_group_split_prevent_group_leakage():
     root = _make_dataset(_TMP / "ds_split")
     samples = parse_manifest(str(root))
     assert len(samples) == 48
@@ -293,14 +296,14 @@ def test_manifest_and_group_split_prevent_meter_leakage():
     seen: dict = {}
     for name, items in splits.items():
         for s in items:
-            assert seen.setdefault(s.meter_id, name) == name, \
-                f"meter {s.meter_id} spans two splits"
+            assert seen.setdefault(s.group_id, name) == name, \
+                f"group {s.group_id} spans two splits"
     assert sum(len(v) for v in splits.values()) == len(samples)
 
 
 def test_msr_batch_sampler_never_mixes_bins():
     root = _make_dataset(_TMP / "ds_sampler")
-    ds = MeterDataset(root / "images", parse_manifest(str(root)),
+    ds = TextDataset(root / "images", parse_manifest(str(root)),
                       build_msr_transforms(training=False, aug_level="none"))
     for batch in MSRBatchSampler(ds, batch_size=4, shuffle=True, drop_last=False):
         bins = {ds.sample_bins[i]["name"] for i in batch}
@@ -309,7 +312,7 @@ def test_msr_batch_sampler_never_mixes_bins():
 
 def test_collate_pads_targets_for_sgm():
     root = _make_dataset(_TMP / "ds_collate")
-    ds = MeterDataset(root / "images", parse_manifest(str(root)),
+    ds = TextDataset(root / "images", parse_manifest(str(root)),
                       build_msr_transforms(training=False, aug_level="none"))
     idx = next(iter(MSRBatchSampler(ds, 4, shuffle=False, drop_last=False)))
     images, flat, lengths, labels, padded, bin_name = collate_fn([ds[i] for i in idx])
@@ -353,7 +356,7 @@ def test_train_predict_export_roundtrip():
     cfg = dict(epochs=2, batch=4, lr=3e-4, weight_decay=1e-4, workers=0,
                warmup_epochs=1, patience=10, amp=False, device="cpu",
                split=(0.75, 0.125, 0.125), seed=0, group_split=True,
-               aug_level="digital", pad_mode="edge", img_h=64, img_w=288,
+               aug_level="digital", pad_mode="edge", img_h=32, img_w=128,
                resize_mode="pad", blank_bias=-2.0, ema_decay=0.9, eval_ema=True,
                ctc_weight=1.0, align_weight=0.5, align_warmup_epochs=5,
                sgm_weight=1.0, sgm_start_epoch=1, sgm_warmup_epochs=1,
@@ -372,7 +375,7 @@ def test_train_predict_export_roundtrip():
     assert isinstance(text, str) and 0.0 <= conf <= 1.0
     assert len(predict_dir(net, root / "images", CTCCodec(), torch.device("cpu"))) == 32
 
-    out = export_onnx(net, 64, 288, str(_TMP / "e2e.onnx"), check=True)
+    out = export_onnx(net, 32, 128, str(_TMP / "e2e.onnx"), check=True)
     assert Path(out).exists()
 
 
@@ -386,7 +389,7 @@ def test_resume_restores_optimizer_epoch_and_history():
     base = dict(batch=4, lr=3e-4, weight_decay=1e-4, workers=0, warmup_epochs=1,
                 patience=50, amp=False, device="cpu", compile=False,
                 split=(0.75, 0.125, 0.125), seed=0, group_split=True,
-                aug_level="none", pad_mode="edge", img_h=64, img_w=288,
+                aug_level="none", pad_mode="edge", img_h=32, img_w=128,
                 resize_mode="pad", blank_bias=-2.0, ema_decay=0.9, eval_ema=True,
                 ctc_weight=1.0, align_weight=0.5, align_warmup_epochs=5,
                 sgm_weight=1.0, sgm_start_epoch=1, sgm_warmup_epochs=1,
@@ -415,7 +418,7 @@ def test_resume_without_a_checkpoint_fails_loudly():
     cfg = dict(epochs=1, batch=4, lr=3e-4, workers=0, warmup_epochs=1, patience=5,
                amp=False, device="cpu", compile=False, resume=True,
                split=(0.75, 0.125, 0.125), seed=0, group_split=True,
-               aug_level="none", pad_mode="edge", img_h=64, img_w=288,
+               aug_level="none", pad_mode="edge", img_h=32, img_w=128,
                resize_mode="pad", blank_bias=-2.0, ema_decay=0.9, eval_ema=True,
                ctc_weight=1.0, align_weight=0.5, align_warmup_epochs=5,
                sgm_weight=1.0, sgm_start_epoch=1, sgm_warmup_epochs=1,
@@ -452,7 +455,7 @@ def test_predict_dir_batches_bins_and_survives_unreadable_files():
     by_name = {n: (t, c) for n, t, c in results}
     assert by_name["broken.png"] == ("", 0.0), "unreadable file must not kill the run"
     # Filename order is preserved despite bin grouping.
-    assert [n for n, _, _ in results] == sorted(by_name)
+    assert [n for n, _, _ in results] == sorted(by_name, key=str.lower)
 
 
 def _run_standalone() -> int:

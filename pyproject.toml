@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "svtrv2"
 version = "1.0.0"
-description = "SVTRv2 OCR engine for digital (seven-segment LCD/LED) utility meter displays"
+description = "SVTRv2 research implementation for scene text recognition"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "Lourdhuraju" }]
-keywords = ["ocr", "meter-reading", "svtrv2", "ctc", "seven-segment", "lcd", "scene-text-recognition"]
+keywords = ["ocr", "svtrv2", "ctc", "scene-text-recognition", "paper-reproduction", "benchmarking"]
 dependencies = [
     "torch>=2.0.0",
     "albumentations>=1.3.0",
