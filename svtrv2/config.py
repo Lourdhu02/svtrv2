@@ -8,11 +8,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-# Charset: 10 digits + '.' (the integer/fraction boundary).  Index 0 is the CTC
-# blank, so characters occupy 1..len(CHARSET) and NUM_CLASSES = len+1.
-CHARSET: str = "0123456789."
+# Charset: the standard STR benchmark set -- 10 digits, 26 lowercase, 26
+# uppercase, 32 punctuation marks, and space (the PARSeq / Union14M order).
+# Index 0 is the CTC blank, so characters occupy 1..len(CHARSET) and
+# NUM_CLASSES = len+1.  Labels containing characters outside this set are
+# skipped (counted and reported) by the dataset loaders.
+CHARSET: str = (
+    "0123456789"
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    " "
+)
 BLANK_IDX: int = 0
-NUM_CLASSES: int = len(CHARSET) + 1  # 12
+NUM_CLASSES: int = len(CHARSET) + 1  # 96
 
 # --------------------------------------------------------------- MSR canvases
 
