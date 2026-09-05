@@ -2,5 +2,7 @@
 *.log
 __pycache__/
 *.pyc
+*.egg-info/
 weights/
 data/
+.svtrv2_scan.npz

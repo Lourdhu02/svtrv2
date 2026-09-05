@@ -20,10 +20,15 @@ dependencies = [
     "PyYAML>=5.4",
     "onnx>=1.14.0",
     "onnxruntime>=1.15.0",
+    "lmdb>=0.9.0",            # LMDBTextDataset (Union14M-L training) + tools/
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "ruff>=0.1.0"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1.0",
+    "huggingface_hub>=0.20",  # re-download the benchmark pack into data/ if needed
+]
 
 [project.scripts]
 svtrv2 = "svtrv2.__main__:main"
