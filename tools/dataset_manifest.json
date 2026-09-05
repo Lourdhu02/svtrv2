@@ -1,0 +1,426 @@
+{
+  "repo": "topdu/OpenOCR-Data",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "size": 4626,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "OST/heavy/data.mdb",
+      "size": 15949824,
+      "sha256": "e128d56e41f46f9b3c83255258fe77f171345ba102c8fb2d13466499a9b1a48d",
+      "lfs": true
+    },
+    {
+      "path": "OST/heavy/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "OST/weak/data.mdb",
+      "size": 17006592,
+      "sha256": "e1f190c47254e6d83e7cc32452dd493f16439749c12173569b1fc8aa39be1c92",
+      "lfs": true
+    },
+    {
+      "path": "OST/weak/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "README.md",
+      "size": 63319,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_challenging/data.mdb",
+      "size": 1562161152,
+      "sha256": "40a7aaa3259d09d99f5e8d6b63497676bc8de7830d3780f747aa9316ef278337",
+      "lfs": true
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_challenging/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_easy/data.mdb",
+      "size": 6427254784,
+      "sha256": "b378b2574151d05637bc9fc8ec40f840adc8c19305e595a3a4ebbabbe2f955f3",
+      "lfs": true
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_easy/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_hard/data.mdb",
+      "size": 1517391872,
+      "sha256": "777fe8e609abbc3cd3a5f3c234341853b9573b004b1163459fc910abe535d2da",
+      "lfs": true
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_hard/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_medium/data.mdb",
+      "size": 405614592,
+      "sha256": "faea34463986fa2bc3a14d61f7f0791b0cc09cc0125c198b53b25c6bef2d2152",
+      "lfs": true
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_medium/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_normal/data.mdb",
+      "size": 662351872,
+      "sha256": "b21cd4e247d14532183dbbf9af6398deefe1ed91d5bef71e9c663d64e38dab6a",
+      "lfs": true
+    },
+    {
+      "path": "Union14M-L-LMDB-Filtered/filter_train_normal/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "evaluation/CUTE80/data.mdb",
+      "size": 4083712,
+      "sha256": "4bd38d4ecdb25fd1b8584ee0cad07bf57bfb087ede68178a24a9e9b56ce65e0c",
+      "lfs": true
+    },
+    {
+      "path": "evaluation/CUTE80/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "evaluation/IC13_857/data.mdb",
+      "size": 75132928,
+      "sha256": "3b335be7df7ac0684bb4de95b0119a22bbed21647e47c12f1d060b5dc83107c2",
+      "lfs": true
+    },
+    {
+      "path": "evaluation/IC13_857/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "evaluation/IC15_1811/data.mdb",
+      "size": 21876736,
+      "sha256": "7126b4b9a7c1249d24ef444a431fc0688fe927344c7713d8aa9db93441eb9fa7",
+      "lfs": true
+    },
+    {
+      "path": "evaluation/IC15_1811/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "evaluation/IIIT5k/data.mdb",
+      "size": 51793920,
+      "sha256": "82055b5c4b8d8ed37d5ed5bf9d3f0cb53da8a6bb67b615ab0f5a3ed33830a69a",
+      "lfs": true
+    },
+    {
+      "path": "evaluation/IIIT5k/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "evaluation/SVT/data.mdb",
+      "size": 6791168,
+      "sha256": "0d05b88a4b84db7b5cfcfea7827ad9e0d7c9de6bc1bc9662fd94992c58236042",
+      "lfs": true
+    },
+    {
+      "path": "evaluation/SVT/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "evaluation/SVTP/data.mdb",
+      "size": 2416640,
+      "sha256": "50108e665d1e22a670faf06e34735d1e1a5efee7a5adb5f34088604ebd3910f8",
+      "lfs": true
+    },
+    {
+      "path": "evaluation/SVTP/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "ltb.tar.xz",
+      "size": 123975288,
+      "sha256": "a5af142ab5af2bf221743a544f106663a3cedbd4f93d6b67e4216dfef076a4da",
+      "lfs": true
+    },
+    {
+      "path": "test/ArT/data.mdb",
+      "size": 558432256,
+      "sha256": "23407e5aff8dcde5f724bbf9cfb8608682d5d23d55640972862ed04f7b5c0e8e",
+      "lfs": true
+    },
+    {
+      "path": "test/ArT/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/COCOv1.4/data.mdb",
+      "size": 33333248,
+      "sha256": "4c72c1b78f282ba9319bee3411c0b2f5dd89a487d1fb18bba25d63a764b41f55",
+      "lfs": true
+    },
+    {
+      "path": "test/COCOv1.4/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/CUTE80/data.mdb",
+      "size": 4083712,
+      "sha256": "4bd38d4ecdb25fd1b8584ee0cad07bf57bfb087ede68178a24a9e9b56ce65e0c",
+      "lfs": true
+    },
+    {
+      "path": "test/CUTE80/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/IC13_1015/data.mdb",
+      "size": 79794176,
+      "sha256": "06e72913455d75a8adeb03f007646da6f1e34bcf4a9918b5f9ae1766572cbebb",
+      "lfs": true
+    },
+    {
+      "path": "test/IC13_1015/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/IC13_1095/data.mdb",
+      "size": 85061632,
+      "sha256": "a87a58840d0d48d733a942800eee2bb0f33eccda22b3bd236b30777da1bd28bf",
+      "lfs": true
+    },
+    {
+      "path": "test/IC13_1095/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/IC13_857/data.mdb",
+      "size": 75132928,
+      "sha256": "3b335be7df7ac0684bb4de95b0119a22bbed21647e47c12f1d060b5dc83107c2",
+      "lfs": true
+    },
+    {
+      "path": "test/IC13_857/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/IC15_1811/data.mdb",
+      "size": 21876736,
+      "sha256": "7126b4b9a7c1249d24ef444a431fc0688fe927344c7713d8aa9db93441eb9fa7",
+      "lfs": true
+    },
+    {
+      "path": "test/IC15_1811/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/IC15_2077/data.mdb",
+      "size": 25763840,
+      "sha256": "ade5485b80104daf2c9db6812e2da97a18705ebf67fe48738943f05767312bd8",
+      "lfs": true
+    },
+    {
+      "path": "test/IC15_2077/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/IIIT5k/data.mdb",
+      "size": 51793920,
+      "sha256": "82055b5c4b8d8ed37d5ed5bf9d3f0cb53da8a6bb67b615ab0f5a3ed33830a69a",
+      "lfs": true
+    },
+    {
+      "path": "test/IIIT5k/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/SVT/data.mdb",
+      "size": 6791168,
+      "sha256": "0d05b88a4b84db7b5cfcfea7827ad9e0d7c9de6bc1bc9662fd94992c58236042",
+      "lfs": true
+    },
+    {
+      "path": "test/SVT/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/SVTP/data.mdb",
+      "size": 2416640,
+      "sha256": "50108e665d1e22a670faf06e34735d1e1a5efee7a5adb5f34088604ebd3910f8",
+      "lfs": true
+    },
+    {
+      "path": "test/SVTP/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "test/Uber/data.mdb",
+      "size": 264884224,
+      "sha256": "1c2bd8abc52283192c1c5a54ca6f708a17e74e4d500ff81d6428534a0937254e",
+      "lfs": true
+    },
+    {
+      "path": "test/Uber/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "u14m/.DS_Store",
+      "size": 8196,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "u14m/artistic/data.mdb",
+      "size": 27856896,
+      "sha256": "d3f4c1b60e5c63e5751cb00d1cf366353399b604459a08319ae17b992db7c7b8",
+      "lfs": true
+    },
+    {
+      "path": "u14m/artistic/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "u14m/contextless/data.mdb",
+      "size": 12111872,
+      "sha256": "28c87f38822745d4a420c77b0121ddf7178200c8ebf535ce0074992503c2bebf",
+      "lfs": true
+    },
+    {
+      "path": "u14m/contextless/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "u14m/curve/data.mdb",
+      "size": 108425216,
+      "sha256": "4fc00bcc5228fd84f24a929e4af5b1633bd7ee246389226e677f6ff6de1769e8",
+      "lfs": true
+    },
+    {
+      "path": "u14m/curve/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "u14m/general/data.mdb",
+      "size": 1190486016,
+      "sha256": "6bafb677f5399fc9a130df2f496ed04c19f3c6da520ecc628bb76ba03b8eac8d",
+      "lfs": true
+    },
+    {
+      "path": "u14m/general/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "u14m/multi_oriented/data.mdb",
+      "size": 18300928,
+      "sha256": "f035e8aa746152291c809c0df3d3edb31755d6e5fa14b8eb6e7d5cfd6b5ba83a",
+      "lfs": true
+    },
+    {
+      "path": "u14m/multi_oriented/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "u14m/multi_words/data.mdb",
+      "size": 20480000,
+      "sha256": "1b80a5abc7ffbe624aea39e391336ff3854322be6e8a36d6435fd260f9f1e30d",
+      "lfs": true
+    },
+    {
+      "path": "u14m/multi_words/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "u14m/salient/data.mdb",
+      "size": 39919616,
+      "sha256": "bdb24dc8dfb8717c082fcb23e5932ff3ae1b4b5e5e6746f0d6ad27fd50914263",
+      "lfs": true
+    },
+    {
+      "path": "u14m/salient/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    },
+    {
+      "path": "wordart_test/data.mdb",
+      "size": 325373952,
+      "sha256": "b1649535d957e53bf523996bbbef8f4cd40c9e34e229ff04b5c72f3ba6e50b1a",
+      "lfs": true
+    },
+    {
+      "path": "wordart_test/lock.mdb",
+      "size": 8192,
+      "sha256": "",
+      "lfs": false
+    }
+  ],
+  "revision": "main"
+}
