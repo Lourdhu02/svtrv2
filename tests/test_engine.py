@@ -131,7 +131,7 @@ def test_codec_roundtrip_and_validation():
     codec = CTCCodec()
     assert codec.encode("01.5") == [codec.c2i[c] for c in "01.5"]
     assert is_valid_label("01234.5")
-    assert not is_valid_label("12a4")
+    assert not is_valid_label("12\u00e94")  # non-ASCII stays outside the charset
     assert not is_valid_label("")
 
 
@@ -456,6 +456,103 @@ def test_predict_dir_batches_bins_and_survives_unreadable_files():
     assert by_name["broken.png"] == ("", 0.0), "unreadable file must not kill the run"
     # Filename order is preserved despite bin grouping.
     assert [n for n, _, _ in results] == sorted(by_name, key=str.lower)
+
+
+def test_charset_covers_benchmark_labels():
+    """The 94 printable-ASCII chars + space, in the PARSeq/Union14M order.
+
+    Every English benchmark label must survive `is_valid_label` now that the
+    package is benchmark-facing, while non-ASCII stays out of scope.
+    """
+    from svtrv2.config import CHARSET
+
+    assert len(CHARSET) == 95
+    assert " " in CHARSET and "A" in CHARSET and "%" in CHARSET
+    codec = CTCCodec()
+    assert len(codec.c2i) == len(CHARSET)
+    for s in ("HELO-123", "AbCdEf!", "war 12.5", "MELBOURNE", "mg.,;:?"):
+        assert is_valid_label(s), s
+        assert codec.decode(codec.encode(s)) == s
+    assert not is_valid_label("caf\u00e9")
+    assert not is_valid_label("\u4f60\u597d")
+
+
+def _write_synthetic_lmdb(lmdb_dir: Path) -> None:
+    """OpenOCR-style text LMDB: num-samples + image-00000000N / label-00000000N."""
+    import lmdb
+
+    lmdb_dir.mkdir(parents=True, exist_ok=True)
+    # All wide enough to land in the same MSR bin (xlong), because collate_fn
+    # is deliberately single-bin.
+    samples = [("HELO", 72, 640), ("world2!", 72, 700), ("caf\u00e9", 64, 560)]
+    env = lmdb.open(str(lmdb_dir), map_size=64 << 20)
+    with env.begin(write=True) as txn:
+        txn.put(b"num-samples", str(len(samples)).encode())
+        for i, (label, dh, dw) in enumerate(samples, 1):
+            img = _render("12345", dw=max(20, dw // 8), dh=dh)
+            ok, buf = cv2.imencode(".png", img)
+            assert ok
+            txn.put(f"image-{i:09d}".encode(), buf.tobytes())
+            txn.put(f"label-{i:09d}".encode(), label.encode("utf-8"))
+    env.close()
+
+
+def test_lmdb_dataset_reads_synthetic_lmdb():
+    from svtrv2.dataset import LMDBTextDataset, MSRBatchSampler
+
+    lmdb_dir = _TMP / "lmdb_syn"
+    _write_synthetic_lmdb(lmdb_dir)
+    tf = build_msr_transforms(training=False, aug_level="none")
+    ds = LMDBTextDataset(lmdb_dir, tf, CTCCodec())
+    # 'caf\u00e9' is outside the charset and must be dropped like a bad manifest row.
+    assert len(ds) == 2
+    labels = {ds[p][3] for p in range(len(ds))}
+    assert labels == {"HELO", "world2!"}
+
+    tensor, target, length, label, bin_name = ds[0]
+    assert tensor.shape[0] == 3 and target.dtype == torch.long
+    assert length == len(label) and bin_name in {str(b["name"]) for b in MSR_BINS}
+    assert sorted(i for v in ds.bin_to_indices.values() for i in v) == list(range(len(ds)))
+
+    # The batch sampler must work unchanged on the LMDB dataset.
+    batches = list(MSRBatchSampler(ds, batch_size=4, shuffle=False, drop_last=False))
+    assert sorted(i for b in batches for i in b) == list(range(len(ds)))
+    imgs, targets, lengths, lbls, padded, bin_name = collate_fn([ds[0], ds[1]])
+    assert imgs.shape[0] == 2 and len(lbls) == 2
+
+
+def test_benchmark_command_evaluates_all_sets():
+    import argparse
+    import io as _io
+    from contextlib import redirect_stdout
+
+    from svtrv2.__main__ import _cmd_benchmark
+
+    root = _TMP / "bench_root"
+    _make_dataset(root / "set_a", n=6)
+    _make_dataset(root / "set_b", n=5)
+    ckpt_path = _TMP / "bench_run" / "best.pth"
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    net = SVTRNet(num_classes=NUM_CLASSES, **MODELS["svtrv2-t"]).eval()
+    torch.save(dict(
+        model_name="svtrv2-t",
+        model_config=dict(num_classes=NUM_CLASSES, **MODELS["svtrv2-t"]),
+        model_state=net.state_dict(), epoch=1,
+        config=dict(pad_mode="edge", batch=8, workers=0),
+    ), ckpt_path)
+
+    buf = _io.StringIO()
+    with redirect_stdout(buf):
+        rc = _cmd_benchmark(argparse.Namespace(
+            ckpt=str(ckpt_path), root=str(root), batch=8, device="cpu", csv=None))
+    assert rc == 0
+    out = buf.getvalue()
+    assert "set_a" in out and "set_b" in out and "macro avg" in out
+
+    csv_path = ckpt_path.parent / "benchmark.csv"
+    assert csv_path.exists(), out
+    body = csv_path.read_text(encoding="utf-8")
+    assert "set_a" in body and "set_b" in body and "exact" in body
 
 
 def _run_standalone() -> int:
