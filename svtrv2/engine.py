@@ -278,7 +278,8 @@ def _save(path: Path, net: nn.Module, ema: ModelEMA, variant: str,
 
 
 def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
-        project: str = "runs", name: str = "exp") -> str:
+        project: str = "runs", name: str = "exp",
+        val_data_dir: Optional[str] = None) -> str:
     device = resolve_device(cfg.get("device"))
     seed_all(cfg.get("seed", 42))
     codec = CTCCodec()
@@ -286,9 +287,18 @@ def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
     run_dir.mkdir(parents=True, exist_ok=True)
     split_dir = run_dir / "splits"
 
-    train_loader, val_loader, test_loader, meta = build_loaders(
-        data_dir, cfg, codec, str(split_dir) if split_dir.is_dir() else None)
-    save_splits(meta["splits"], split_dir)
+    # Two data sources: a manifest dataset (images/ + labels.txt) is split
+    # in-process and the split persisted; an LMDB corpus (Union14M-L) streams
+    # as-is and borrows its val/test splits from --val-data when given.
+    if (Path(data_dir) / "labels.txt").exists():
+        train_loader, val_loader, test_loader, meta = build_loaders(
+            data_dir, cfg, codec, str(split_dir) if split_dir.is_dir() else None)
+        save_splits(meta["splits"], split_dir)
+    else:
+        from .dataset import build_lmdb_loaders
+
+        train_loader, val_loader, test_loader, meta = build_lmdb_loaders(
+            data_dir, cfg, codec, val_data_dir)
 
     model_cfg: Dict[str, Any] = dict(num_classes=NUM_CLASSES, **MODELS[variant])
     for k in ("img_h", "img_w", "resize_mode", "pad_mode", "blank_bias"):
@@ -367,6 +377,22 @@ def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
         scheduler.step()
 
         eval_net = ema.ema if eval_ema else net
+        if val_loader is None:
+            # LMDB corpus without --val-data: there is no held-out signal here,
+            # so no best.pth is written -- keep the resume state current and go.
+            lr = optimizer.param_groups[0]["lr"]
+            history.append(dict(epoch=epoch, lr=lr,
+                                **{f"train_{k}": v for k, v in tr.items()}))
+            print(f"  {epoch:>4}/{cfg['epochs']:<3}  {tr['total']:>7.4f}  {tr['ctc']:>7.4f}  "
+                  f"{tr['align']:>7.4f}  {tr['sgm']:>7.4f}      --      --      --      --  "
+                  f"{lr:>9.2e}    -")
+            _save(last_path, net, ema, variant, model_cfg, cfg, epoch,
+                  {"loss": float("nan"), "exact": 0.0, "char_acc": 0.0, "cer": 1.0},
+                  optimizer=optimizer, scheduler=scheduler, scaler=scaler,
+                  best=-1.0, wait=0, history=history)
+            (run_dir / "history.json").write_text(
+                json.dumps(history, indent=2), encoding="utf-8")
+            continue
         val = evaluate(eval_net, val_loader, device, cfg, codec, ctc_loss)
         lr = optimizer.param_groups[0]["lr"]
         history.append(dict(epoch=epoch, lr=lr,

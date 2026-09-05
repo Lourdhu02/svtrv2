@@ -13,7 +13,10 @@ from .config import MODELS, VARIANTS, load_config, resolve_model_name
 
 def _add_train_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model", default="svtrv2-s", help=f"one of {', '.join(VARIANTS)} (or t/s/b/xl)")
-    p.add_argument("--data", required=True, help="dataset dir (images/ + labels.txt)")
+    p.add_argument("--data", required=True,
+                   help="manifest dataset dir (images/ + labels.txt) or LMDB corpus dir")
+    p.add_argument("--val-data", default=None,
+                   help="manifest dataset for val/test splits when --data is an LMDB corpus")
     p.add_argument("--config", default=None, help="optional YAML overriding the defaults")
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--batch", type=int, default=None)
@@ -77,6 +80,14 @@ def main() -> int:
     bp = sub.add_parser("bins", help="measure a dataset and suggest MSR bin edges")
     bp.add_argument("--data", required=True)
 
+    bm = sub.add_parser("benchmark", help="evaluate a checkpoint on every benchmark set")
+    bm.add_argument("--ckpt", required=True)
+    bm.add_argument("--root", default="data/evaluation",
+                    help="directory holding one <name>/ (images/ + labels.txt) per benchmark")
+    bm.add_argument("--batch", type=int, default=256)
+    bm.add_argument("--device", default=None)
+    bm.add_argument("--csv", default=None, help="write per-benchmark rows to this CSV")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -99,6 +110,8 @@ def main() -> int:
         return _cmd_info(args)
     if args.command == "bins":
         return _cmd_bins(args)
+    if args.command == "benchmark":
+        return _cmd_benchmark(args)
     return 0
 
 
@@ -112,14 +125,14 @@ def _cmd_train(args) -> int:
     from .engine import fit
 
     overrides = {k: v for k, v in vars(args).items()
-                 if k not in ("command", "model", "data", "config", "project", "name",
-                              "no_ema_eval", "no_compile")}
+                 if k not in ("command", "model", "data", "val_data", "config", "project",
+                              "name", "no_ema_eval", "no_compile")}
     if args.no_ema_eval:
         overrides["eval_ema"] = False
     if args.no_compile:
         overrides["compile"] = False
     cfg = load_config(args.config, **overrides)
-    fit(variant, args.data, cfg, args.project, args.name)
+    fit(variant, args.data, cfg, args.project, args.name, val_data_dir=args.val_data)
     return 0
 
 
@@ -248,6 +261,74 @@ def _cmd_bins(args) -> int:
     print("\n  Set width ~= aspect * height for each bin so the canvas is mostly signal,")
     print("  and keep timesteps = width // 8.")
     print(json.dumps(stats, indent=2))
+    return 0
+
+
+def _cmd_benchmark(args) -> int:
+    """Evaluate one checkpoint on every benchmark set under --root.
+
+    Each child directory holds one benchmark (images/ + labels.txt, the
+    tools/lmdb_to_manifest.py output).  This is the STR-benchmark protocol:
+    every usable sample of every set, no splitting, no augmentation.  The
+    weighted average follows the sample counts; the macro average is the
+    plain mean over sets, which is how most papers report "Average".
+    """
+    import torch
+
+    from .dataset import build_eval_loader
+    from .engine import evaluate, load_checkpoint, resolve_device
+    from .text import CTCCodec
+
+    root = Path(args.root)
+    if not root.is_dir():
+        print(f"error: benchmark root not found: {root}", file=sys.stderr)
+        return 1
+    sets = sorted(d for d in root.iterdir()
+                  if d.is_dir() and (d / "labels.txt").exists())
+    if not sets:
+        print(f"error: no benchmark sets (images/ + labels.txt) under {root}",
+              file=sys.stderr)
+        return 1
+
+    device = resolve_device(args.device)
+    net, ckpt = load_checkpoint(args.ckpt, device)
+    cfg = dict(ckpt.get("config") or load_config())
+    cfg["batch"] = args.batch
+    ctc = torch.nn.CTCLoss(blank=0, zero_infinity=True)
+    codec = CTCCodec()
+    acc = ckpt.get("val_acc")
+    print(f"  {ckpt.get('model_name', '?')}  |  epoch {ckpt.get('epoch')}"
+          f"{f'  |  train-val {acc:.1%}' if isinstance(acc, float) else ''}"
+          f"  |  device {device}\n")
+
+    rows = []
+    for d in sets:
+        loader = build_eval_loader(str(d), cfg, codec)
+        if loader is None:
+            print(f"  {d.name:>12}:  skipped (no usable samples)")
+            continue
+        m = evaluate(net, loader, device, cfg, codec, ctc)
+        rows.append(dict(set=d.name, n=int(m["n"]), exact=m["exact"],
+                         char_acc=m["char_acc"], cer=m["cer"], loss=m["loss"]))
+        print(f"  {d.name:>12}:  n={int(m['n']):>6,}  exact={m['exact']:>6.1%}  "
+              f"char={m['char_acc']:>6.1%}  cer={m['cer']:.4f}")
+
+    if not rows:
+        return 1
+    n_total = sum(r["n"] for r in rows)
+    weighted = sum(r["exact"] * r["n"] for r in rows) / n_total
+    macro = sum(r["exact"] for r in rows) / len(rows)
+    print(f"\n  macro avg exact over {len(rows)} sets:     {macro:.1%}")
+    print(f"  weighted avg exact over {n_total:,} samples: {weighted:.1%}")
+
+    out = Path(args.csv) if args.csv else Path(args.ckpt).parent / "benchmark.csv"
+    with open(out, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["dataset", "n", "exact", "char_acc", "cer", "loss"])
+        for r in rows:
+            w.writerow([r["set"], r["n"], f"{r['exact']:.4f}",
+                        f"{r['char_acc']:.4f}", f"{r['cer']:.4f}", f"{r['loss']:.4f}"])
+    print(f"  wrote {out}")
     return 0
 
 
