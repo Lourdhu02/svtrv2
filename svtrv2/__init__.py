@@ -5,7 +5,7 @@ does not pull in torch unless it is actually needed.
 """
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "CHARSET", "NUM_CLASSES", "MODELS", "VARIANTS", "MSR_BINS",
