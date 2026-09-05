@@ -12,6 +12,11 @@ This repository is being refactored as a paper-first codebase:
 - SVTRv2 visual backbone with local/global mixing
 - FRM and train-only SGM
 - MSR preprocessing and bucketed batching
+- 94 printable-ASCII + space charset (96 classes), covering every English STR benchmark
+- LMDB-first data layer: evaluation sets and the Union14M-L training corpus are read
+  straight from the OpenOCR-style LMDBs, no image extraction
+- `svtrv2 benchmark`: one checkpoint across every benchmark pack with per-set and
+  macro-averaged exact/char/CER
 - synthetic tests that exercise the full training/inference/export loop
 - CLI for training, validation, prediction, export, and dataset inspection
 
@@ -24,6 +29,9 @@ python -m svtrv2 bins --data /path/to/benchmark
 python -m svtrv2 train --model s --data /path/to/benchmark --device cuda
 python -m svtrv2 val --ckpt runs/exp/best.pth --data /path/to/benchmark
 ```
+
+See [`docs/data-setup.md`](docs/data-setup.md) for downloading and verifying the
+benchmark pack into `data/`.
 
 ## Variants
 
@@ -52,28 +60,44 @@ end state is a clean research workflow centered on paper benchmarks.
 ## CLI
 
 ```bash
-python -m svtrv2 train   --model s --data DATA --device cuda --name run1
-python -m svtrv2 train   --model s --data DATA --name run1 --resume
-python -m svtrv2 val     --ckpt runs/run1/best.pth --data DATA
-python -m svtrv2 predict --ckpt runs/run1/best.pth --source image_or_dir -o predictions.csv
-python -m svtrv2 export  --ckpt runs/run1/best.pth --bin medium
-python -m svtrv2 info    --model xl
-python -m svtrv2 bins    --data DATA
+python -m svtrv2 train      --model s --data DATA --device cuda --name run1
+python -m svtrv2 train      --model s --data DATA --name run1 --resume
+python -m svtrv2 val        --ckpt runs/run1/best.pth --data DATA
+python -m svtrv2 benchmark  --ckpt runs/run1/best.pth --root data --csv runs/run1/benchmark.csv
+python -m svtrv2 predict    --ckpt runs/run1/best.pth --source image_or_dir -o predictions.csv
+python -m svtrv2 export     --ckpt runs/run1/best.pth --bin medium
+python -m svtrv2 info       --model xl
+python -m svtrv2 bins       --data DATA
 ```
 
 `predict` writes `filename,text,confidence,flag` for directory inputs and flags
 rows below `--min-conf` as `REVIEW`.
 
-## Dataset layout
+## Data
 
-```text
-<data_dir>/
-  images/
-  labels.txt      # "filename<TAB>text" per line
-```
+Two layouts are supported, chosen automatically by `--data`:
 
-The manifest parser keeps related samples together when a shared group id is
-present in the filename prefix before the first `-`.
+- **LMDB** (OpenOCR-style: `num-samples`, `image-%09d`, `label-%09d`): a directory
+  of one or more LMDBs. Evaluation benchmarks are read this way directly, and
+  Union14M-L trains straight from its LMDBs with no image extraction:
+
+  ```bash
+  python -m svtrv2 train --data data/Union14M-L-LMDB-Filtered --model s
+  ```
+
+- **Manifest**: `images/` + `labels.txt` ("`filename<TAB>text`" per line). The
+  parser keeps related samples together when a shared group id is present in the
+  filename prefix before the first `-`.
+
+Labels outside the charset are dropped, counted, and reported in both paths.
+
+## Tools
+
+Under `tools/` (see [`docs/data-setup.md`](docs/data-setup.md)):
+
+- `verify_dataset.py` — check `data/` against `dataset_manifest.json` (size + sha256)
+- `repair_dataset.py` — resumable re-download of exactly the corrupt/missing files
+- `inspect_lmdb.py`, `lmdb_to_manifest.py` — LMDB sanity checks and conversion
 
 ## Paper PDF
 
