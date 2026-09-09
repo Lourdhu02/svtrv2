@@ -1,8 +1,11 @@
 # Research Gaps
 
-1. MSR is still hand-set. There is no learned routing or distortion-aware bucket
-   selection.
-2. SGM is train-only. There is no explicit inference-time linguistic context.
+1. MSR is still hand-set. **ADDRESSED IN CODE**: `--route` learns per-sample
+   canvas choice with loss-based preference supervision
+   (`svtrv2/routing.py`); experiments pending.
+2. SGM is train-only. **ADDRESSED IN CODE**: `--distill` transfers the SGM's
+   linguistic context into the CTC head at aligned timesteps while keeping
+   inference CTC-only (`svtrv2/distill.py`); experiments pending.
 3. The current repo is narrow in charset and task framing, so it does not yet
    answer general scene-text generalization.
 4. Long-text behavior is not studied systematically.

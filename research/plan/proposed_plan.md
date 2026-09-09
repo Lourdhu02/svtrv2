@@ -1,6 +1,8 @@
 # Proposed Plan
 
-Status: research only, no implementation yet
+Status: **implemented behind flags** (`--route`, `--distill`), tested
+(`tests/test_novelty.py`), experiments pending. See
+`research/method/method.md` for the formal method and the ablation grid.
 
 ## Recommendation
 

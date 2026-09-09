@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import random
 from functools import partial
-from typing import Any, Dict, Tuple
+from typing import Any, Dict
 
 import cv2
 import numpy as np

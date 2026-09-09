@@ -166,11 +166,20 @@ class TextDataset(Dataset):
     """
 
     def __init__(self, images_dir, samples: Sequence[Sample], transform,
-                 codec: Optional[CTCCodec] = None) -> None:
+                 codec: Optional[CTCCodec] = None,
+                 emit_router_fields: bool = False) -> None:
         self.images_dir = Path(images_dir)
         self.samples = list(samples)
         self.transform = transform
         self.codec = codec or CTCCodec()
+        # ARD routing mode: additionally emit the fixed-size probe canvas, the
+        # raw aspect ratio, and the original crop (for exact canvas
+        # materialization in the router's exploration pass).
+        self.emit_router_fields = bool(emit_router_fields)
+        if self.emit_router_fields:
+            from .routing import probe_tensor  # local: keeps the base path light
+
+            self._probe_tensor = probe_tensor
 
         cache_path = self.images_dir.parent / "msr_cache.json"
         cache: Dict[str, str] = {}
@@ -222,7 +231,11 @@ class TextDataset(Dataset):
         tf = self.transform[str(info["name"])] if isinstance(self.transform, dict) else self.transform
         tensor = tf(image=img)["image"]
         target = torch.tensor(self.codec.encode(s.label), dtype=torch.long)
-        return tensor, target, len(s.label), s.label, str(info["name"])
+        if not self.emit_router_fields:
+            return tensor, target, len(s.label), s.label, str(info["name"])
+        probe = self._probe_tensor(img)
+        ar = float(img.shape[1]) / max(float(img.shape[0]), 1.0)
+        return tensor, target, len(s.label), s.label, str(info["name"]), probe, ar, img
 
 # ------------------------------------------------------------ LMDB data source
 
@@ -371,10 +384,15 @@ class LMDBTextDataset(Dataset):
     """
 
     def __init__(self, lmdb_dirs, transform, codec: Optional[CTCCodec] = None,
-                 verbose: bool = True) -> None:
+                 verbose: bool = True, emit_router_fields: bool = False) -> None:
         import lmdb  # fail here, at construction, with a clear name
 
         self._lmdb = lmdb
+        self.emit_router_fields = bool(emit_router_fields)
+        if self.emit_router_fields:
+            from .routing import probe_tensor  # local: keeps the base path light
+
+            self._probe_tensor = probe_tensor
         if isinstance(lmdb_dirs, (str, Path)):
             lmdb_dirs = [lmdb_dirs]
         self.dirs = [Path(d) for d in lmdb_dirs]
@@ -441,7 +459,11 @@ class LMDBTextDataset(Dataset):
         tf = self.transform[str(info["name"])] if isinstance(self.transform, dict) else self.transform
         tensor = tf(image=img)["image"]
         target = torch.tensor(self.codec.encode(label), dtype=torch.long)
-        return tensor, target, len(label), label, str(info["name"])
+        if not self.emit_router_fields:
+            return tensor, target, len(label), label, str(info["name"])
+        probe = self._probe_tensor(img)
+        ar = float(img.shape[1]) / max(float(img.shape[0]), 1.0)
+        return tensor, target, len(label), label, str(info["name"]), probe, ar, img
 
 
 class MSRBatchSampler(Sampler):
@@ -503,8 +525,16 @@ def collate_fn(batch):
     ``padded_targets`` is the right-padded (B, L) form with 0 as padding, which
     is what the semantic guidance module and the alignment warmup consume; the
     flat concatenated form is what ``nn.CTCLoss`` wants.
+
+    When the dataset emits ARD router fields (probe canvas, raw aspect ratio,
+    original crop), the return grows to
+    ``(..., bin_name, probes, aspect_ratios, originals)`` -- the trailing three
+    feed the adaptive MSR router and its exploration pass.
     """
-    imgs, targets, lengths, labels, bin_names = zip(*batch)
+    if len(batch[0]) == 5:
+        imgs, targets, lengths, labels, bin_names = zip(*batch)
+    else:
+        imgs, targets, lengths, labels, bin_names, probes, ars, origs = zip(*batch)
     images = torch.stack(imgs, 0)
     flat = torch.cat(targets, 0) if targets else torch.zeros(0, dtype=torch.long)
 
@@ -513,12 +543,18 @@ def collate_fn(batch):
     for i, t in enumerate(targets):
         padded[i, :len(t)] = t
 
+    if len(batch[0]) == 5:
+        return (images, flat, torch.tensor(lengths, dtype=torch.long),
+                list(labels), padded, bin_names[0])
     return (images, flat, torch.tensor(lengths, dtype=torch.long),
-            list(labels), padded, bin_names[0])
+            list(labels), padded, bin_names[0],
+            torch.stack(probes, 0), torch.tensor(ars, dtype=torch.float32),
+            list(origs))
 
 
 def build_loaders(data_dir: str, cfg: Dict[str, Any], codec: Optional[CTCCodec] = None,
-                  split_dir: Optional[str] = None
+                  split_dir: Optional[str] = None,
+                  route: bool = False
                   ) -> Tuple[DataLoader, DataLoader, Optional[DataLoader], Dict[str, Any]]:
     """Build train/val/test loaders, reusing persisted splits when present."""
     codec = codec or CTCCodec()
@@ -541,7 +577,8 @@ def build_loaders(data_dir: str, cfg: Dict[str, Any], codec: Optional[CTCCodec] 
     if workers > 0:
         kw["persistent_workers"] = True
 
-    train_ds = TextDataset(images_dir, splits["train"], train_tf, codec)
+    train_ds = TextDataset(images_dir, splits["train"], train_tf, codec,
+                           emit_router_fields=route)
     train_sampler = MSRBatchSampler(train_ds, cfg["batch"], shuffle=True,
                                     drop_last=True, seed=cfg.get("seed", 42))
     train_loader = DataLoader(train_ds, batch_sampler=train_sampler, **kw)
@@ -558,7 +595,7 @@ def build_loaders(data_dir: str, cfg: Dict[str, Any], codec: Optional[CTCCodec] 
 
 
 def build_lmdb_loaders(lmdb_dirs, cfg: Dict[str, Any], codec: Optional[CTCCodec] = None,
-                       val_data_dir: Optional[str] = None
+                       val_data_dir: Optional[str] = None, route: bool = False
                        ) -> Tuple[DataLoader, DataLoader, Optional[DataLoader], Dict[str, Any]]:
     """Loaders for LMDB-backed training corpora (Union14M-L, OpenOCR layout).
 
@@ -576,7 +613,8 @@ def build_lmdb_loaders(lmdb_dirs, cfg: Dict[str, Any], codec: Optional[CTCCodec]
                                     cfg.get("pad_mode", "edge"))
     eval_tf = build_msr_transforms(False, "none", cfg.get("pad_mode", "edge"))
 
-    train_ds = LMDBTextDataset(lmdb_dirs, train_tf, codec)
+    train_ds = LMDBTextDataset(lmdb_dirs, train_tf, codec,
+                               emit_router_fields=route)
     train_sampler = MSRBatchSampler(train_ds, cfg["batch"], shuffle=True,
                                     drop_last=True, seed=cfg.get("seed", 42))
     workers = min(cfg.get("workers", 8), os.cpu_count() or 1)

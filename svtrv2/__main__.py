@@ -43,6 +43,26 @@ def _add_train_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--sgm-weight", type=float, default=None)
     p.add_argument("--sgm-start-epoch", type=int, default=None)
     p.add_argument("--sgm-warmup-epochs", type=int, default=None)
+    # ARD: adaptive MSR routing (novel)
+    p.add_argument("--route", action="store_true",
+                   help="adaptive MSR routing: learn per-sample canvas choice")
+    p.add_argument("--router-explore-every", type=int, default=None)
+    p.add_argument("--router-eval-bs", type=int, default=None)
+    p.add_argument("--router-weight", type=float, default=None)
+    p.add_argument("--router-entropy", type=float, default=None)
+    p.add_argument("--router-lr", type=float, default=None)
+    # ARD: SGM -> CTC distillation (novel)
+    p.add_argument("--distill", action="store_true",
+                   help="distill the train-only SGM into the CTC head")
+    p.add_argument("--distill-weight", type=float, default=None)
+    p.add_argument("--distill-align", default=None, choices=["uniform", "viterbi"])
+    p.add_argument("--distill-temperature", type=float, default=None)
+    p.add_argument("--distill-ce-mix", type=float, default=None)
+    p.add_argument("--distill-start-epoch", type=int, default=None)
+    # recipe presets
+    p.add_argument("--preset", default="default", choices=["default", "paper"],
+                   help="'paper' applies the official SVTRv2 training recipe "
+                        "(AdamW wd 0.05, OneCycle, 20 epochs, lr 6.5e-4)")
 
 
 def main() -> int:
@@ -67,6 +87,9 @@ def main() -> int:
     pp.add_argument("-o", "--out", default=None, help="CSV path for directory input")
     pp.add_argument("--min-conf", type=float, default=0.90,
                     help="rows below this are flagged REVIEW (default 0.90)")
+    pp.add_argument("--route", action="store_true",
+                    help="route canvases with the checkpoint's ARD router "
+                         "instead of the static aspect-ratio rule")
 
     ep = sub.add_parser("export", help="export ONNX")
     ep.add_argument("--ckpt", required=True)
@@ -126,11 +149,22 @@ def _cmd_train(args) -> int:
 
     overrides = {k: v for k, v in vars(args).items()
                  if k not in ("command", "model", "data", "val_data", "config", "project",
-                              "name", "no_ema_eval", "no_compile")}
+                              "name", "no_ema_eval", "no_compile", "preset")}
     if args.no_ema_eval:
         overrides["eval_ema"] = False
     if args.no_compile:
         overrides["compile"] = False
+    # Recipe presets fill gaps only: an explicit CLI flag always wins.
+    presets = {
+        # Official SVTRv2 U14M recipe (OpenOCR svtrv2_tiny_rctc.yml, ICCV 2025).
+        "paper": dict(epochs=20, lr=6.5e-4, weight_decay=0.05,
+                      scheduler="onecycle", warmup_epochs=2,
+                      filter_wd=True, batch=256),
+        "default": {},
+    }
+    for k, v in presets.get(args.preset, {}).items():
+        if overrides.get(k) is None:
+            overrides[k] = v
     cfg = load_config(args.config, **overrides)
     fit(variant, args.data, cfg, args.project, args.name, val_data_dir=args.val_data)
     return 0
@@ -168,6 +202,7 @@ def _cmd_val(args) -> int:
 def _cmd_predict(args) -> int:
     from .engine import (load_checkpoint, predict_dir, predict_image,
                          resolve_device, transform_for)
+    from .routing import load_router
     from .text import CTCCodec
 
     device = resolve_device(args.device)
@@ -175,6 +210,10 @@ def _cmd_predict(args) -> int:
     codec = CTCCodec()
     # Serve with the same preprocessing the checkpoint was trained under.
     transform = transform_for(ckpt)
+    router = load_router(ckpt, device) if args.route else None
+    if args.route and router is None:
+        print("  note: --route requested but the checkpoint has no router; "
+              "using the static aspect-ratio rule")
     src = Path(args.source)
     if not src.exists():
         print(f"error: source not found: {src}", file=sys.stderr)
@@ -191,7 +230,8 @@ def _cmd_predict(args) -> int:
         print(f"  {src.name} -> {text or '<empty>'}  (conf {conf:.3f}){flag}")
         return 0
 
-    results = predict_dir(net, src, codec, device, transform, batch=args.batch)
+    results = predict_dir(net, src, codec, device, transform, batch=args.batch,
+                          router=router)
     if not results:
         print(f"error: no images found in {src}", file=sys.stderr)
         return 1

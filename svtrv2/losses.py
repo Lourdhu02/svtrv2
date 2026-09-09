@@ -3,59 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class FocalCTCLoss(nn.Module):
-    """CTC loss with focal weighting to focus on hard examples.
-
-    Down-weights easy (low-loss) samples so the model concentrates on
-    confusable digits like 6/8 and 1/7.  gamma=0 recovers standard CTC.
-    """
-
-    def __init__(self, blank: int = 0, gamma: float = 2.0, zero_infinity: bool = True) -> None:
-        super().__init__()
-        self.ctc = nn.CTCLoss(blank=blank, zero_infinity=zero_infinity, reduction='none')
-        self.gamma = gamma
-
-    def forward(self, log_probs, targets, input_lengths, target_lengths):
-        # reduction='none' returns the loss SUMMED over each target sequence.
-        # Exponentiating that directly gives p ~ 1e-5 for any real label, so
-        # (1 - p)^gamma collapses to 1 and the focal term silently does
-        # nothing.  Normalising per character first makes p a genuine mean
-        # per-character likelihood, which is what focal weighting expects.
-        per_sample = self.ctc(log_probs, targets, input_lengths, target_lengths)
-        per_char = per_sample / target_lengths.clamp(min=1).to(per_sample.dtype)
-        p = torch.exp(-per_char)
-        focal = ((1.0 - p) ** self.gamma) * per_char
-        return focal.mean()
-
-
-class CenterLoss(nn.Module):
-    """Center loss that pulls per-timestep features toward learned class centers.
-
-    Uses CTC argmax predictions as pseudo-labels.  Encourages the backbone to
-    produce tightly clustered embeddings for each digit class.
-    """
-
-    def __init__(self, num_classes: int, feat_dim: int) -> None:
-        super().__init__()
-        self.centers = nn.Parameter(torch.randn(num_classes, feat_dim))
-        nn.init.kaiming_normal_(self.centers)
-
-    def forward(self, features: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
-        """Compute center loss using argmax pseudo-labels.
-
-        Args:
-            features: backbone features (B, T, D)
-            logits: model output log-probs (B, T, C) — used for argmax labels
-        """
-        labels = logits.argmax(2)
-        B, T, D = features.shape
-        flat_feat = features.reshape(-1, D)
-        flat_labels = labels.reshape(-1)
-        centers_batch = self.centers[flat_labels]
-        # Mean over feature dim keeps the loss O(1) regardless of D.
-        return ((flat_feat - centers_batch) ** 2).mean()
-
-
 class SGMLoss(nn.Module):
     """Cross-entropy for the two SVTRv2 semantic guidance streams."""
 

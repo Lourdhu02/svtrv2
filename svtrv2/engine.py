@@ -18,7 +18,7 @@ import torch
 import torch.nn as nn
 from torch.amp import autocast
 
-from .config import DEFAULTS, MODELS, NUM_CLASSES
+from .config import DEFAULTS, MODELS, MSR_BINS, NUM_CLASSES
 from .dataset import build_loaders, save_splits
 from .losses import SGMLoss, UniformAlignmentLoss
 from .model import SVTRNet
@@ -72,7 +72,19 @@ class ModelEMA:
                 eb.copy_(mb)
 
 
-def build_scheduler(optimizer, cfg: Dict[str, Any]):
+def build_scheduler(optimizer, cfg: Dict[str, Any],
+                    steps_per_epoch: Optional[int] = None):
+    """Cosine-with-warmup by epoch, or OneCycleLR (the paper's recipe) by step."""
+    if cfg.get("scheduler", "cosine") == "onecycle":
+        if steps_per_epoch is None:
+            raise ValueError("scheduler='onecycle' requires steps_per_epoch")
+        epochs = max(int(cfg["epochs"]), 1)
+        total = max(epochs * int(steps_per_epoch), 1)
+        # warmup_epochs doubles as the fraction of the cycle spent warming up
+        pct = min(max(float(cfg.get("warmup_epochs", 5)) / epochs, 0.01), 0.5)
+        return torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, max_lr=cfg["lr"], total_steps=total, pct_start=pct,
+            cycle_momentum=False)
     warmup = cfg.get("warmup_epochs", 5)
     total = cfg["epochs"]
     min_ratio = cfg.get("min_lr", 1e-6) / cfg["lr"]
@@ -84,6 +96,59 @@ def build_scheduler(optimizer, cfg: Dict[str, Any]):
         return min_ratio + (1 - min_ratio) * 0.5 * (1 + math.cos(math.pi * min(prog, 1.0)))
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_fn)
+
+
+def _distill_weight(epoch: int, cfg: Dict[str, Any]) -> float:
+    """Distillation weight, ramped in with the SGM schedule."""
+    w = float(cfg.get("distill_weight", 0.5))
+    start = int(cfg.get("distill_start_epoch", cfg.get("sgm_start_epoch", 5)))
+    ramp = int(cfg.get("sgm_warmup_epochs", 10))
+    if epoch < start:
+        return 0.0
+    if ramp <= 0:
+        return w
+    return w * min(1.0, (epoch - start + 1) / ramp)
+
+
+@torch.no_grad()
+def _bin_losses(net: SVTRNet, idx, origs, bins, padded, lengths, device,
+                pad_mode: str) -> torch.Tensor:
+    """Per-character CTC loss of each selected sample on an exact canvas.
+
+    Used by the ARD router's exploration pass.  Canvases are materialized as
+    true fit-pads from the original crop -- never by re-warping an already
+    resized tensor, which would measure a double-resize artifact instead of
+    the canvas quality.  The net is briefly put in eval mode so exploration
+    forwards do not pollute BatchNorm statistics or fire dropout.
+    """
+    from .routing import canvas_from_image, canvas_to_tensor
+
+    was_training = net.training
+    net.eval()
+    try:
+        crit = nn.CTCLoss(blank=0, zero_infinity=True, reduction="none")
+        out = torch.zeros(len(idx), device=device)
+        by_bin: Dict[int, list] = {}
+        for k, b in enumerate(bins):
+            by_bin.setdefault(int(b), []).append(k)
+        for bin_idx, ks in by_bin.items():
+            stack = torch.stack([
+                canvas_to_tensor(canvas_from_image(origs[k], bin_idx, pad_mode))
+                for k in ks
+            ]).to(device)
+            feats = net.forward_features(stack)
+            log_probs = net.head(feats.float()).float().log_softmax(2)
+            t = log_probs.shape[1]
+            in_len = torch.full((len(ks),), t, dtype=torch.long, device=device)
+            tgt = torch.cat([padded[k, :int(lengths[k])] for k in ks])
+            tgt_len = torch.tensor([int(lengths[k]) for k in ks], device=device)
+            per_char = crit(log_probs.permute(1, 0, 2), tgt, in_len, tgt_len) \
+                / tgt_len.clamp(min=1)
+            for j, k in enumerate(ks):
+                out[k] = per_char[j]
+        return out
+    finally:
+        net.train(was_training)
 
 
 def loss_weights(epoch: int, cfg: Dict[str, Any]) -> Tuple[float, float, float]:
@@ -154,15 +219,18 @@ def compute_metrics(preds: List[str], gts: List[str]) -> Dict[str, float]:
 
 def train_epoch(net: SVTRNet, loader, optimizer, device, cfg, epoch, ema=None,
                 ctc_loss=None, align_loss=None, sgm_loss=None, scaler=None,
-                fwd_features=None, fwd_sgm=None) -> Dict[str, float]:
+                fwd_features=None, fwd_sgm=None, router=None, router_loss=None,
+                router_opt=None, distill_loss=None, route_state=None) -> Dict[str, float]:
     net.train()
     use_amp = cfg.get("amp", True) and device.type == "cuda"
     dtype = _amp_dtype(cfg)
     ctc_w, align_w, sgm_w = loss_weights(epoch, cfg)
+    distill_w = _distill_weight(epoch, cfg) if distill_loss is not None else 0.0
     fwd_features = fwd_features or net.forward_features
     fwd_sgm = fwd_sgm or net.forward_sgm
+    router_every = max(int(cfg.get("router_explore_every", 20)), 1)
 
-    sums = dict(total=0.0, ctc=0.0, align=0.0, sgm=0.0)
+    sums = dict(total=0.0, ctc=0.0, align=0.0, sgm=0.0, distill=0.0, router=0.0)
     steps = 0
     try:
         from tqdm import tqdm
@@ -172,7 +240,12 @@ def train_epoch(net: SVTRNet, loader, optimizer, device, cfg, epoch, ema=None,
     except Exception:
         pass
 
-    for images, targets, lengths, _labels, padded, _bin in loader:
+    for batch in loader:
+        images, targets, lengths, _labels, padded, _bin = batch[:6]
+        probes = batch[6] if len(batch) > 6 else None
+        ars = batch[7] if len(batch) > 7 else None
+        origs = batch[8] if len(batch) > 8 else None
+
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         lengths = lengths.to(device, non_blocking=True)
@@ -193,10 +266,20 @@ def train_epoch(net: SVTRNet, loader, optimizer, device, cfg, epoch, ema=None,
                 loss_align = align_loss(log_probs, padded, lengths, in_len)
                 loss = loss + align_w * loss_align
 
+            sgm_logits = None
             loss_sgm = torch.zeros((), device=device)
+            # One SGM forward serves both the SGM loss and the distillation.
+            if sgm_w > 0 or (distill_w > 0 and distill_loss is not None):
+                sgm_logits = fwd_sgm(feats.float(), padded)
             if sgm_w > 0:
-                loss_sgm = sgm_loss(fwd_sgm(feats.float(), padded), padded)
+                loss_sgm = sgm_loss(sgm_logits, padded)
                 loss = loss + sgm_w * loss_sgm
+
+            loss_distill = torch.zeros((), device=device)
+            if distill_w > 0 and distill_loss is not None and sgm_logits is not None:
+                loss_distill = distill_loss(log_probs, sgm_logits, padded,
+                                            lengths, in_len)
+                loss = loss + distill_w * loss_distill
 
         optimizer.zero_grad(set_to_none=True)
         if scaler is not None and scaler.is_enabled():
@@ -220,10 +303,48 @@ def train_epoch(net: SVTRNet, loader, optimizer, device, cfg, epoch, ema=None,
         if ema is not None and stepped:
             ema.update(net)
 
+        # ---- ARD router: loss-based preference + decisiveness regularizer ----
+        loss_router = torch.zeros((), device=device)
+        if router is not None and router_loss is not None and probes is not None:
+            probes_d = probes.to(device, non_blocking=True)
+            ars_d = ars.to(device, non_blocking=True)
+            r_logits = router(probes_d, ars_d)
+            preference = None
+            if origs and route_state is not None:
+                route_state["step"] = route_state.get("step", 0) + 1
+                if route_state["step"] % router_every == 0:
+                    n = min(int(cfg.get("router_eval_bs", 32)), len(origs))
+                    sel = torch.randperm(len(origs))[:n].tolist()
+                    # Candidate A: the router's own pick.  Candidate B: the
+                    # static aspect-ratio rule, or -- when the router already
+                    # agrees with it -- the router's runner-up.
+                    with torch.no_grad():
+                        order = r_logits.argsort(dim=1, descending=True).cpu()
+                        a = order[:, 0]
+                        static = torch.tensor(
+                            [next(i for i, bi in enumerate(MSR_BINS)
+                                  if float(ars[k]) < bi["max_ar"])
+                             for k in range(len(origs))], dtype=torch.long)
+                        b = torch.where(static == a, order[:, 1], static)
+                        pad_mode = cfg.get("pad_mode", "edge")
+                        la = _bin_losses(net, sel, origs, a[sel].tolist(),
+                                         padded, lengths, device, pad_mode)
+                        lb = _bin_losses(net, sel, origs, b[sel].tolist(),
+                                         padded, lengths, device, pad_mode)
+                    preference = router_loss.preference(
+                        r_logits[sel], a[sel].to(device), b[sel].to(device), la, lb)
+            loss_router, _ = router_loss(r_logits, ars_d, preference)
+            if router_opt is not None:
+                router_opt.zero_grad(set_to_none=True)
+                loss_router.backward()
+                router_opt.step()
+
         sums["total"] += float(loss.detach())
         sums["ctc"] += float(loss_ctc.detach())
         sums["align"] += float(loss_align.detach())
         sums["sgm"] += float(loss_sgm.detach())
+        sums["distill"] += float(loss_distill.detach())
+        sums["router"] += float(loss_router.detach())
         steps += 1
 
     return {k: v / max(steps, 1) for k, v in sums.items()}
@@ -290,15 +411,17 @@ def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
     # Two data sources: a manifest dataset (images/ + labels.txt) is split
     # in-process and the split persisted; an LMDB corpus (Union14M-L) streams
     # as-is and borrows its val/test splits from --val-data when given.
+    route_on = bool(cfg.get("route", False))
     if (Path(data_dir) / "labels.txt").exists():
         train_loader, val_loader, test_loader, meta = build_loaders(
-            data_dir, cfg, codec, str(split_dir) if split_dir.is_dir() else None)
+            data_dir, cfg, codec, str(split_dir) if split_dir.is_dir() else None,
+            route=route_on)
         save_splits(meta["splits"], split_dir)
     else:
         from .dataset import build_lmdb_loaders
 
         train_loader, val_loader, test_loader, meta = build_lmdb_loaders(
-            data_dir, cfg, codec, val_data_dir)
+            data_dir, cfg, codec, val_data_dir, route=route_on)
 
     model_cfg: Dict[str, Any] = dict(num_classes=NUM_CLASSES, **MODELS[variant])
     for k in ("img_h", "img_w", "resize_mode", "pad_mode", "blank_bias"):
@@ -306,14 +429,49 @@ def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
     model_cfg["msr"] = True
     net = SVTRNet(**model_cfg).to(device)
 
-    optimizer = torch.optim.AdamW(net.parameters(), lr=cfg["lr"],
-                                  weight_decay=cfg.get("weight_decay", 1e-4))
-    scheduler = build_scheduler(optimizer, cfg)
+    if cfg.get("filter_wd", False):
+        # Paper recipe: no weight decay on biases, norms, or embeddings.
+        decay, no_decay = [], []
+        for n, p in net.named_parameters():
+            if not p.requires_grad:
+                continue
+            (no_decay if p.ndim <= 1 or ".bias" in n or "embed" in n.lower()
+             else decay).append(p)
+        optimizer = torch.optim.AdamW(
+            [{"params": decay, "weight_decay": cfg.get("weight_decay", 1e-4)},
+             {"params": no_decay, "weight_decay": 0.0}],
+            lr=cfg["lr"])
+    else:
+        optimizer = torch.optim.AdamW(net.parameters(), lr=cfg["lr"],
+                                      weight_decay=cfg.get("weight_decay", 1e-4))
+    scheduler = build_scheduler(optimizer, cfg, steps_per_epoch=len(train_loader))
     ctc_loss = nn.CTCLoss(blank=0, zero_infinity=True)
     align_loss = UniformAlignmentLoss()
     sgm_loss = SGMLoss()
     ema = ModelEMA(net, cfg.get("ema_decay", 0.999))
     eval_ema = bool(cfg.get("eval_ema", True))
+
+    # ---- ARD: adaptive routing + SGM->CTC distillation (both default off) ----
+    router = router_opt = router_loss_fn = None
+    route_state = {"step": 0}
+    if route_on:
+        from .routing import MSRRouter, RouterLoss
+
+        router = MSRRouter().to(device)
+        router_opt = torch.optim.Adam(router.parameters(),
+                                      lr=cfg.get("router_lr", 1e-3))
+        router_loss_fn = RouterLoss(weight=cfg.get("router_weight", 0.5),
+                                    entropy=cfg.get("router_entropy", 0.01))
+        print("  route: on (adaptive MSR routing, loss-based preference)")
+    distill_loss = None
+    if bool(cfg.get("distill", False)):
+        from .distill import AlignmentDistillLoss
+
+        distill_loss = AlignmentDistillLoss(
+            align=cfg.get("distill_align", "uniform"),
+            temperature=cfg.get("distill_temperature", 2.0),
+            ce_mix=cfg.get("distill_ce_mix", 0.2))
+        print(f"  distill: on (SGM -> CTC head, align={cfg.get('distill_align', 'uniform')})")
 
     use_amp = cfg.get("amp", True) and device.type == "cuda"
     # A GradScaler is required for fp16 and must stay disabled for bf16: bf16 has
@@ -332,6 +490,8 @@ def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
         ck = torch.load(last_path, map_location=device, weights_only=False)
         net.load_state_dict(ck["model_state"])
         ema.ema.load_state_dict(ck["ema_state"])
+        if router is not None and ck.get("router_state"):
+            router.load_state_dict(ck["router_state"])
         optimizer.load_state_dict(ck["optimizer_state"])
         scheduler.load_state_dict(ck["scheduler_state"])
         if "scaler_state" in ck:
@@ -373,7 +533,8 @@ def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
             sampler.set_epoch(epoch)
         tr = train_epoch(net, train_loader, optimizer, device, cfg, epoch, ema,
                          ctc_loss, align_loss, sgm_loss, scaler,
-                         fwd_features, fwd_sgm)
+                         fwd_features, fwd_sgm, router, router_loss_fn,
+                         router_opt, distill_loss, route_state)
         scheduler.step()
 
         eval_net = ema.ema if eval_ema else net
@@ -389,7 +550,7 @@ def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
             _save(last_path, net, ema, variant, model_cfg, cfg, epoch,
                   {"loss": float("nan"), "exact": 0.0, "char_acc": 0.0, "cer": 1.0},
                   optimizer=optimizer, scheduler=scheduler, scaler=scaler,
-                  best=-1.0, wait=0, history=history)
+                  best=-1.0, wait=0, history=history, router=router)
             (run_dir / "history.json").write_text(
                 json.dumps(history, indent=2), encoding="utf-8")
             continue
@@ -406,14 +567,14 @@ def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
         mark = ""
         if score > best or not best_path.exists():
             _save(best_path, eval_net, ema, variant, model_cfg, cfg, epoch, val,
-                  best_uses_ema=eval_ema)
+                  best_uses_ema=eval_ema, router=router)
         if score > best:
             best, wait, mark = score, 0, " *"
         else:
             wait += 1
         _save(last_path, net, ema, variant, model_cfg, cfg, epoch, val,
               optimizer=optimizer, scheduler=scheduler, scaler=scaler,
-              best=best, wait=wait, history=history)
+              best=best, wait=wait, history=history, router=router)
 
         print(f"  {epoch:>4}/{cfg['epochs']:<3}  {tr['total']:>7.4f}  {tr['ctc']:>7.4f}  "
               f"{tr['align']:>7.4f}  {tr['sgm']:>7.4f}  {val['loss']:>7.4f}  "
@@ -498,12 +659,16 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 
 @torch.no_grad()
 def predict_dir(net: SVTRNet, source_dir, codec: CTCCodec, device: torch.device,
-                transform=None, batch: int = 32) -> List[Tuple[str, str, float]]:
+                transform=None, batch: int = 32, router=None) -> List[Tuple[str, str, float]]:
     """Read every image in a folder, batching within each MSR bin.
 
     Images of different aspect ratios land on different canvases and cannot share
     a batch, so files are grouped by bin first and the results re-sorted into
     filename order.  One-at-a-time inference wastes most of the GPU.
+
+    With ``router`` (an ARD MSRRouter restored from the checkpoint), the bin is
+    chosen by the learned router instead of the static aspect-ratio rule; the
+    recognition graph itself stays CTC-only.
     """
     files = sorted(f for f in Path(source_dir).iterdir()
                    if f.is_file() and f.suffix.lower() in IMAGE_EXTS)
@@ -521,8 +686,20 @@ def predict_dir(net: SVTRNet, source_dir, codec: CTCCodec, device: torch.device,
             # than killing the whole batch run.
             results[i] = (f.name, "", 0.0)
             continue
-        bin_name = select_msr_bin(img.shape[0], img.shape[1])["name"]
-        groups.setdefault(str(bin_name), []).append((i, f, transform(image=img)["image"]))
+        if router is not None:
+            from .routing import probe_tensor, routed_bin_name
+
+            probe = probe_tensor(img).to(device)
+            ar = img.shape[1] / max(img.shape[0], 1)
+            bin_name = routed_bin_name(probe, ar, router)
+            # The routed bin decides the canvas: apply that bin's transform,
+            # not the static aspect-ratio one.
+            tf = (transform.transforms[str(bin_name)]
+                  if isinstance(transform, MSRTransform) else transform)
+            groups.setdefault(str(bin_name), []).append((i, f, tf(image=img)["image"]))
+        else:
+            bin_name = select_msr_bin(img.shape[0], img.shape[1])["name"]
+            groups.setdefault(str(bin_name), []).append((i, f, transform(image=img)["image"]))
 
     for items in groups.values():
         for start in range(0, len(items), batch):

@@ -4,12 +4,18 @@ Structural rules the paper is specific about, and which a looser implementation
 tends to get wrong:
 
 - A mixing block is **local or global, never both**.  Local mixing is two
-  consecutive grouped convolutions with no normalization or activation between
-  them; global mixing is MHSA.  Summing a conv branch onto an attention branch
-  inside every block is a different architecture.
+  consecutive grouped 3x3 convolutions with no normalization or activation
+  between them (official ``SVTRv2LNConvTwo33``); global mixing is MHSA.
+  Summing a conv branch onto an attention branch inside every block is a
+  different architecture.
 - Heads and conv groups are both **D_i / 32**.
-- **No positional encoding anywhere**, which is what lets one set of weights
-  accept all three MSR canvas sizes.
+- **No positional encoding anywhere** (the paper config sets
+  ``use_pos_embed: False``), which is what lets one set of weights accept all
+  MSR canvas sizes.
+- Downsampling follows the official ``sub_k = [[1, 1], [2, 1]]``: the stem
+  downsamples 4x, the stage-1 merge halves height only, and the stage-2 merge
+  does not downsample, so the final map is H/8 x W/4 and CTC gets
+  ``timesteps = canvas_width // 4`` frames.
 """
 from typing import Optional, Tuple
 
@@ -134,10 +140,11 @@ class GlobalMixing(nn.Module):
 class LocalMixing(nn.Module):
     """SVTRv2 local mixing: "Conv^2", two consecutive grouped convolutions.
 
-    Paper Sec. 3.2 and Suppl. Sec. 6: SVTR's sliding-window local attention is
-    replaced by two consecutive grouped convolutions, with **no normalization
-    or activation layer between them**, capturing character-level detail such
-    as edges, textures and strokes.  Groups = D_i / 32 = the head count.
+    Paper Sec. 3.2 and official ``SVTRv2LNConvTwo33``: SVTR's sliding-window
+    local attention is replaced by two consecutive grouped 3x3 convolutions,
+    with **no normalization or activation layer between them**, capturing
+    character-level detail such as edges, textures and strokes.  Groups =
+    D_i / 32 = the head count.
 
     The convolutions are 2D over the (H/8, W/4) feature map.  Convolving the
     flattened sequence instead would only ever reach horizontal neighbours and
@@ -145,7 +152,7 @@ class LocalMixing(nn.Module):
     """
 
     def __init__(self, dim: int, num_heads: Optional[int] = None,
-                 local_k: Tuple[int, int] = (5, 5), drop: float = 0.0) -> None:
+                 local_k: Tuple[int, int] = (3, 3), drop: float = 0.0) -> None:
         super().__init__()
         groups = num_heads or _svtrv2_heads(dim)
         pad = (local_k[0] // 2, local_k[1] // 2)
@@ -411,10 +418,11 @@ class SVTRNet(nn.Module):
             for i in range(depths[1])
         ])
         idx += depths[1]
-        # Stride 2 in width as well as the usual height reduction in merge1.
-        # The width stride is kept at 8 so CTC has enough frames for common
-        # short-text benchmarks while still being efficient.
-        self.merge2 = nn.Conv2d(dims[1], dims[2], 3, (1, 2), 1)
+        # Stage-2 merge follows the official sub_k = [[1, 1], [2, 1]]: it does
+        # NOT downsample.  The final map is H/8 x W/4, so CTC gets
+        # width // 4 frames (32 for a 128-wide canvas), matching the official
+        # implementation's temporal resolution.
+        self.merge2 = nn.Conv2d(dims[1], dims[2], 3, (1, 1), 1)
         self.merge2_norm = nn.LayerNorm(dims[2])
         self.stage3 = nn.ModuleList([
             SVTRBlock(dims[2], heads[2], mixer=mixers[2][i], mlp_ratio=mlp_ratio,

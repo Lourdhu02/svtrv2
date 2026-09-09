@@ -3,7 +3,7 @@
 SVTRv2 research implementation for scene text recognition.
 
 This repository is being refactored as a paper-first codebase:
-- base paper: [SVTRv2: CTC Beats Encoder-Decoder Models in Scene Text Recognition](papers/SVTRv2_2411.15858v2.pdf)
+- base paper: [SVTRv2: CTC Beats Encoder-Decoder Models in Scene Text Recognition](papers/SVTRv2_2411.15858v2.pdf) (ICCV 2025)
 - focus: reproducible training, evaluation, ablations, and benchmark reporting
 - scope: no meter-OCR product framing, no deployment-specific branding
 
@@ -72,6 +72,24 @@ python -m svtrv2 bins       --data DATA
 
 `predict` writes `filename,text,confidence,flag` for directory inputs and flags
 rows below `--min-conf` as `REVIEW`.
+
+## Research extension — ARD (novel)
+
+Beyond the baseline, this repo implements **ARD**: *Adaptive Routing and
+Semantic-Guidance Distillation*, an inference-preserving extension of SVTRv2
+(formal write-up: [`research/method/method.md`](research/method/method.md)):
+
+- **Adaptive MSR routing** (`--route`): a tiny learned router replaces the
+  hand-set aspect-ratio edges, supervised by which canvas the recognizer
+  itself reads best (loss-based preference exploration). Serving stays
+  CTC-only; `predict --route` uses the trained router.
+- **SGM -> CTC distillation** (`--distill`): the train-only semantic guidance
+  streams become a soft teacher for the CTC head at uniform- or Viterbi-
+  aligned timesteps. The exported model is byte-identical to the baseline.
+
+Both default off — the baseline is bit-for-bit the paper recipe — and both are
+covered by the test suite. The official training recipe is available via
+`--preset paper` (AdamW wd 0.05, OneCycleLR, 20 epochs, lr 6.5e-4).
 
 ## Data
 

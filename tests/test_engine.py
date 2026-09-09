@@ -111,9 +111,10 @@ def test_msr_bins_are_contiguous_and_consistent():
     for a, b in zip(MSR_BINS, MSR_BINS[1:]):
         assert a["max_ar"] == b["min_ar"], "bin edges must not leave a gap"
     for b in MSR_BINS:
-        # The backbone strides width by 8; timesteps must agree or the CTC input
-        # lengths silently disagree with the real sequence length.
-        assert b["timesteps"] == b["width"] // 8, b["name"]
+        # Official sub_k = [[1, 1], [2, 1]]: the final feature map is H/8 x W/4,
+        # so timesteps must equal width // 4 or the CTC input lengths silently
+        # disagree with the real sequence length.
+        assert b["timesteps"] == b["width"] // 4, b["name"]
 
 
 # ---------------------------------------------------------------------- text
@@ -225,7 +226,8 @@ def test_forward_is_log_softmax():
     net = SVTRNet(num_classes=NUM_CLASSES, **MODELS["svtrv2-s"]).eval()
     with torch.no_grad():
         out = net(torch.randn(2, 3, 64, 192))
-    assert torch.allclose(out.exp().sum(-1), torch.ones(2, 24), atol=1e-4)
+    # Official sub_k: final map is H/8 x W/4 -> 64/8=8 rows, 192/4=48 timesteps.
+    assert torch.allclose(out.exp().sum(-1), torch.ones(2, 48), atol=1e-4)
 
 
 def test_blank_bias_biases_the_blank_class():

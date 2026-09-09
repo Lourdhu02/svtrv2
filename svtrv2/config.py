@@ -29,11 +29,17 @@ NUM_CLASSES: int = len(CHARSET) + 1  # 96
 #
 # The bucket boundaries are paper-facing defaults.  In a research run, measure
 # the target benchmark distribution and adjust these to match the data.
+#
+# Timestep math matches the official SVTRv2 encoder (OpenOCR
+# `SVTRv2LNConvTwo33`, `sub_k = [[1, 1], [2, 1]]`): the stem downsamples 4x,
+# the stage-1 merge halves height only, and the stage-2 merge does **not**
+# downsample.  The final feature map is therefore H/8 x W/4, i.e.
+# ``timesteps = width // 4`` (32 frames for a 128-wide canvas).
 MSR_BINS: Tuple[Dict[str, Any], ...] = (
-    dict(name="short", min_ar=0.0, max_ar=1.5, height=32, width=128, feature_h=4, timesteps=16),
-    dict(name="medium", min_ar=1.5, max_ar=2.5, height=32, width=192, feature_h=4, timesteps=24),
-    dict(name="long", min_ar=2.5, max_ar=3.5, height=32, width=256, feature_h=4, timesteps=32),
-    dict(name="xlong", min_ar=3.5, max_ar=float("inf"), height=32, width=384, feature_h=4, timesteps=48),
+    dict(name="short", min_ar=0.0, max_ar=1.5, height=32, width=128, feature_h=4, timesteps=32),
+    dict(name="medium", min_ar=1.5, max_ar=2.5, height=32, width=192, feature_h=4, timesteps=48),
+    dict(name="long", min_ar=2.5, max_ar=3.5, height=32, width=256, feature_h=4, timesteps=64),
+    dict(name="xlong", min_ar=3.5, max_ar=float("inf"), height=32, width=384, feature_h=4, timesteps=96),
 )
 
 # ------------------------------------------------------------------- variants
@@ -114,7 +120,7 @@ DEFAULTS: Dict[str, Any] = dict(
     seed=42,
     ema_decay=0.999,
     eval_ema=True,
-    scheduler="cosine",
+    scheduler="cosine",       # 'cosine' | 'onecycle' (paper recipe)
     save_every=10,
     # data
     split=(0.9, 0.05, 0.05),
@@ -128,6 +134,22 @@ DEFAULTS: Dict[str, Any] = dict(
     sgm_start_epoch=5,
     sgm_warmup_epochs=10,
     blank_bias=-2.0,
+    # --- Adaptive MSR routing (ARD, novel; default off keeps the baseline) ---
+    route=False,              # learned per-sample canvas routing
+    router_explore_every=20,  # exploration pass every N steps
+    router_eval_bs=32,        # samples per exploration pass
+    router_weight=0.5,        # preference-loss weight
+    router_entropy=0.01,      # decisiveness regularizer weight
+    router_lr=1e-3,
+    # --- SGM -> CTC distillation (ARD, novel; default off) ---
+    distill=False,            # distill the train-only SGM into the CTC head
+    distill_weight=0.5,
+    distill_align="uniform",  # 'uniform' | 'viterbi'
+    distill_temperature=2.0,
+    distill_ce_mix=0.2,       # mix of (smoothed) GT CE into the KL objective
+    distill_start_epoch=5,    # ramps in with the SGM schedule
+    # --- optimizer fidelity ---
+    filter_wd=False,          # no weight decay on bias/norm (paper recipe on)
 )
 
 

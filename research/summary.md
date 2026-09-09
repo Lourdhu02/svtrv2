@@ -1,19 +1,26 @@
 # SVTRv2 Research Synthesis
 
-Date: 2026-09-02
+Date: 2026-09-08 (updated)
 
 This repo is now treated as a paper-first SVTRv2 research workspace.
-The current codebase is faithful to the core SVTRv2 mechanism, but it is also
-intentionally narrower and more operational than the paper:
+The current codebase is faithful to the core SVTRv2 mechanism, and it now
+carries a tested research extension on top:
 
-- core paper mechanics are preserved: MSR, FRM, SGM, local/global mixing rules
-- the current repo is benchmark-hardened: persisted splits, group-aware splitting,
+- core paper mechanics are preserved and verified against the official
+  OpenOCR implementation: MSR, FRM, SGM, local/global mixing rules, no
+  positional encoding, sub_k downsample schedule, two 3x3 grouped-conv local
+  mixing, W/4 timesteps
+- the repo is benchmark-hardened: persisted splits, group-aware splitting,
   exact-match plus CER reporting, fixed-width ONNX export
-- the current harness is narrower than the paper: digits plus decimal point
+- charset: 94 printable ASCII + space (96 classes), covering every English
+  STR benchmark
+- **ARD extension implemented and tested (default off):** adaptive MSR routing
+  (`--route`) and SGM->CTC distillation (`--distill`), both inference-
+  preserving; see `research/method/method.md` and `tests/test_novelty.py`
 
-The key follow-up opportunity is not to re-implement SVTRv2, but to make a new
-paper on an extension that preserves CTC simplicity at inference while improving
-robustness on harder benchmarks.
+The key follow-up opportunity is no longer implementation but *evidence*: run
+the Phase 3 baseline, then the ARD ablation grid in `research/method/method.md`,
+on the planned benchmark suite.
 
 Recommended primary thesis:
 
