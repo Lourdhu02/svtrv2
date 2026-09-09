@@ -509,6 +509,8 @@ def fit(variant: str, data_dir: str, cfg: Dict[str, Any],
     fwd_features, fwd_sgm = net.forward_features, net.forward_sgm
     if cfg.get("compile", True) and device.type == "cuda":
         try:
+            import triton  # noqa: F401  -- inductor's GPU backend; absent on many Windows builds
+
             fwd_features = torch.compile(net.forward_features, dynamic=False)
             fwd_sgm = torch.compile(net.forward_sgm, dynamic=False)
             print("  compile: on (first batch per MSR bin pays the compile cost)")

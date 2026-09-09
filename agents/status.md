@@ -25,8 +25,17 @@ evidence, and what to pick up next. Update it as you work.
 
 ## Left ⬜ (priority order)
 
-1. **Extract LTB**: `tar -xf data/ltb.tar.xz`; check layout; wire into `benchmark`
-   if not auto-discovered. (The long-text benchmark is the research differentiator.)
+0. **Done in the 1-hour execution session (2026-09-08):** LTB extracted and wired
+   as `data/ltb_benchmark` (4,789/4,789 samples, charset-clean, via new
+   `tools/build_ltb_manifest.py`); all Union14M scan caches built in 74 s via new
+   `tools/scan_lmdb_caches.py` (3,223,974 usable; bins short 32.8% / medium 29.0% /
+   long 18.4% / xlong 19.7% — default edges are fine); two GPU smokes on LTB with
+   `--preset paper` + `--route --distill --distill-align viterbi` passed (losses
+   fall, router trains, SGM active, compile degrades to eager gracefully when
+   Triton is absent — fixed in `fit`); `benchmark` dry-run on GPU wrote CSV.
+   Remaining gap: `benchmark` only consumes manifest sets — evaluation packs are
+   LMDBs, so extend `_cmd_benchmark` (or convert via `tools/lmdb_to_manifest.py`).
+1. **Extract LTB**: DONE (see 0).
 2. **Smoke train on GPU**: `python -m svtrv2 train --data data/Union14M-L-LMDB-Filtered
    --model t --preset paper --epochs 2 --batch 256 --device cuda --name smoke`
 3. **Baseline lock**: `--model s --preset paper --name s-base` (early stop + EMA built in).
